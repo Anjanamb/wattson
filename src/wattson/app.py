@@ -69,7 +69,7 @@ class WattsonApp(App):
         grid-size: 2 2;
         grid-gutter: 1 1;
         padding: 1 1;
-        height: 18;
+        height: 20;
     }
 
     StatPanel {
