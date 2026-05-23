@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wattson"
+version = "0.0.1"
+description = "Your machine's personal assistant — DL-workload-aware system monitor"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Anjana Bandara", email = "anjana4mb@gmail.com" }]
+keywords = ["monitoring", "gpu", "nvidia", "deep-learning", "tui", "textual", "system"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console :: Curses",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Monitoring",
+]
+dependencies = [
+  "textual>=0.50",
+  "psutil>=5.9",
+  "py-cpuinfo>=9.0",
+  "nvidia-ml-py>=12.535",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+wattson = "wattson.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Anjanamb/wattson"
+Issues   = "https://github.com/Anjanamb/wattson/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wattson"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
