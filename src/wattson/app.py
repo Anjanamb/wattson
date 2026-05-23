@@ -36,15 +36,18 @@ class ProcessTable(DataTable):
     def on_mount(self) -> None:
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_columns("PID", "NAME", "CPU%", "MEM MB", "GPU", "VRAM MB", "COMMAND")
+        self.add_columns(
+            "PID", "NAME", "CPU%", "MEM MB", "GPU", "VRAM MB", "COMMAND"
+        )
 
     def refresh_rows(self, rows: list[dict]) -> None:
-        # remember the cursor so the row under the user's selection survives a refresh
+        # preserve cursor across refreshes
         cursor_row = self.cursor_row
         self.clear()
         for r in rows:
-            gpu_str = f"#{r['gpu_idx']}" if r["gpu_idx"] is not None else "—"
-            vram_str = f"{r['vram_mb']:.0f}" if r["vram_mb"] is not None else "—"
+            gi, vm = r["gpu_idx"], r["vram_mb"]
+            gpu_str = f"#{gi}" if gi is not None else "—"
+            vram_str = f"{vm:.0f}" if vm is not None else "—"
             self.add_row(
                 str(r["pid"]),
                 r["name"][:24],
