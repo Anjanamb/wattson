@@ -1,17 +1,17 @@
-"""wattson TUI — minimal 4-panel dashboard."""
+"""wattson TUI — 4-stat dashboard + GPU-aware process table."""
 
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
-from textual.containers import Grid
+from textual.containers import Grid, Vertical
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, Static
 
-from .probes import cpu, disk, gpu, memory
+from .probes import cpu, disk, gpu, memory, processes
 
 
 class StatPanel(Static):
-    """A single resource panel with a title and a body that re-renders on `body` change."""
+    """One resource panel; re-renders when `body` changes."""
 
     body: reactive[str] = reactive("loading…")
 
@@ -30,19 +30,57 @@ class StatPanel(Static):
             self.body = f"[red]probe error:[/red] {e}"
 
 
+class ProcessTable(DataTable):
+    """Top processes by GPU + CPU usage. Refreshed by the parent App."""
+
+    def on_mount(self) -> None:
+        self.cursor_type = "row"
+        self.zebra_stripes = True
+        self.add_columns("PID", "NAME", "CPU%", "MEM MB", "GPU", "VRAM MB", "COMMAND")
+
+    def refresh_rows(self, rows: list[dict]) -> None:
+        # remember the cursor so the row under the user's selection survives a refresh
+        cursor_row = self.cursor_row
+        self.clear()
+        for r in rows:
+            gpu_str = f"#{r['gpu_idx']}" if r["gpu_idx"] is not None else "—"
+            vram_str = f"{r['vram_mb']:.0f}" if r["vram_mb"] is not None else "—"
+            self.add_row(
+                str(r["pid"]),
+                r["name"][:24],
+                f"{r['cpu_pct']:.1f}",
+                f"{r['mem_mb']:.0f}",
+                gpu_str,
+                vram_str,
+                r["cmdline"],
+            )
+        if 0 <= cursor_row < self.row_count:
+            self.move_cursor(row=cursor_row)
+
+
 class WattsonApp(App):
     CSS = """
     Screen { background: #0b0d10; }
-    Grid {
+
+    #stats-grid {
         grid-size: 2 2;
         grid-gutter: 1 1;
-        padding: 1 2;
+        padding: 1 1;
+        height: 14;
     }
+
     StatPanel {
         border: round #38bdf8;
-        padding: 1 2;
+        padding: 0 2;
         color: #e6e8eb;
     }
+
+    ProcessTable {
+        height: 1fr;
+        margin: 0 1 1 1;
+        border: round #38bdf8;
+    }
+
     Header { background: #14171c; }
     Footer { background: #14171c; }
     """
@@ -54,11 +92,13 @@ class WattsonApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Grid():
-            yield StatPanel("CPU", cpu.snapshot, id="cpu-panel")
-            yield StatPanel("GPU", gpu.snapshot, id="gpu-panel")
-            yield StatPanel("Memory", memory.snapshot, id="mem-panel")
-            yield StatPanel("Disk", disk.snapshot, id="disk-panel")
+        with Vertical():
+            with Grid(id="stats-grid"):
+                yield StatPanel("CPU", cpu.snapshot, id="cpu-panel")
+                yield StatPanel("GPU", gpu.snapshot, id="gpu-panel")
+                yield StatPanel("Memory", memory.snapshot, id="mem-panel")
+                yield StatPanel("Disk", disk.snapshot, id="disk-panel")
+            yield ProcessTable(id="processes-table")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -73,6 +113,12 @@ class WattsonApp(App):
     def _refresh_all(self) -> None:
         for panel in self.query(StatPanel):
             panel.refresh_body()
+        try:
+            rows = processes.snapshot(limit=20)
+            self.query_one("#processes-table", ProcessTable).refresh_rows(rows)
+        except Exception:
+            # processes probe is best-effort; keep the rest of the UI alive
+            pass
 
 
 def main() -> None:

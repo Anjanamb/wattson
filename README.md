@@ -4,19 +4,19 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.1` — minimal scaffold. CPU, GPU, memory, disk panels with 1 Hz refresh.
+**Status:** `v0.0.2` — 4-stat dashboard + GPU-aware process table, 1 Hz refresh.
 
 ## Planned features
 
-### Shipped in v0.0.1
-- [x] CPU usage, frequency, model, core count
-- [x] NVIDIA GPU utilisation, VRAM, temperature (graceful fallback when no GPU)
-- [x] System memory + swap
-- [x] Disk usage per partition
-- [x] Live-refreshing TUI (textual)
+### Shipped
+- [x] CPU usage, frequency, model, core count *(v0.0.1)*
+- [x] NVIDIA GPU utilisation, VRAM, temperature with graceful no-GPU fallback *(v0.0.1)*
+- [x] System memory + swap *(v0.0.1)*
+- [x] Disk usage per partition *(v0.0.1)*
+- [x] Live-refreshing TUI (textual) *(v0.0.1)*
+- [x] **GPU-aware process table** — top processes by VRAM + CPU, with which-GPU attribution *(v0.0.2)*
 
 ### Coming
-- [ ] `nvidia-smi`-equivalent process list (which PID owns which GPU, VRAM held)
 - [ ] Thermal history + throttling alerts (`nvidia-smi --query-gpu=clocks_throttle_reasons.*`)
 - [ ] Process kill / priority controls (from inside the TUI)
 - [ ] CPU/GPU boost / power-limit controls (`nvidia-smi -pl`, governor switching)

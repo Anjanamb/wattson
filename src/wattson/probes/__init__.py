@@ -5,6 +5,6 @@ Probes are deliberately stateless and synchronous for v0. As features grow
 carry state across refreshes.
 """
 
-from . import cpu, disk, gpu, memory
+from . import cpu, disk, gpu, memory, processes
 
-__all__ = ["cpu", "disk", "gpu", "memory"]
+__all__ = ["cpu", "disk", "gpu", "memory", "processes"]

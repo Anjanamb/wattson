@@ -6,7 +6,13 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.1` — minimal scaffold. 4-panel TUI (CPU / GPU / Memory / Disk) refreshing at 1 Hz. Repo is **private** (`Anjanamb/wattson`); flip to public when there's a real MVP.
+`v0.0.2` — 4-stat dashboard + GPU-aware process table, refreshing at 1 Hz. Repo is **private** (`Anjanamb/wattson`); flip to public when there's a real MVP.
+
+### v0.0.2 additions
+
+- `src/wattson/probes/processes.py` — `ProcessProbe` class (stateful: keeps psutil.Process cache so `cpu_percent()` deltas are meaningful from snapshot #2 onwards). Cross-references NVML compute processes with psutil for per-process VRAM, CPU%, memory, cmdline.
+- `ProcessTable` widget in `app.py` (extends `DataTable`); rows sorted GPU-first by VRAM desc, then non-GPU by CPU% desc.
+- **Probe contract evolved as anticipated**: `processes.snapshot()` returns `list[ProcessRow]` (TypedDict), not a string. Other probes still return strings for now — only evolve when needed.
 
 ## Layout
 
@@ -51,7 +57,7 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 ## Planned features (from the original brief)
 
 1. ✅ Task-manager-style perf (CPU/GPU/Mem/Disk) — v0.0.1
-2. ⏳ `nvidia-smi` output equivalents (process list, clocks, power, throttle reasons)
+2. 🟡 `nvidia-smi` output equivalents — **process list done (v0.0.2)**; clocks, power, throttle reasons still TBD
 3. ⏳ Temperatures (CPU temps need `psutil.sensors_temperatures()` on Linux + WMI on Windows)
 4. ⏳ Throttling — `nvmlDeviceGetCurrentClocksThrottleReasons`
 5. ⏳ Kill processes (textual modal + `psutil.Process(pid).terminate()`)
