@@ -2,6 +2,13 @@
 
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
+[![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.2-7DD3FC?style=flat-square)](#planned-features)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
+[![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
 **Status:** `v0.0.2` — 4-stat dashboard + GPU-aware process table, 1 Hz refresh.
@@ -45,4 +52,4 @@ Watt (power) + Watson (assistant). Your hardware burns watts; wattson watches.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) — see [anjanamb.github.io](https://anjanamb.github.io/) for more projects.
