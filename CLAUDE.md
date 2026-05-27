@@ -6,7 +6,7 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.2` — 4-stat dashboard + GPU-aware process table, refreshing at 1 Hz. Repo is **private** (`Anjanamb/wattson`); flip to public when there's a real MVP.
+`v0.0.2` — 4-stat dashboard + GPU-aware process table, refreshing at 1 Hz. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
 
 ### v0.0.2 additions
 
@@ -52,7 +52,7 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 | `src/` layout + `hatchling` | Modern Python packaging; PEP 517; avoids import-from-cwd footgun |
 | Probes return strings (not structs) for v0 | Smaller surface; refactor when needed |
 | Each probe wrapped in try/except in the panel | One bad probe must not crash the loop |
-| Private repo at start | No empty-shell on profile; flip via `gh repo edit Anjanamb/wattson --visibility public` |
+| Was private at start, public from v0.0.2 | Started private to avoid an empty-shell on the profile. Flipped public once the process table shipped + user wanted it pinned. |
 
 ## Planned features (from the original brief)
 
@@ -85,4 +85,4 @@ ruff check .             # lint
 - Don't merge probes into `app.py` — clean separation is the whole point of `probes/`.
 - Don't make GPU probe crash when NVML isn't available — DL devs without GPUs (or on AMD/Mac) should still see the other panels.
 - Don't introduce `subprocess` calls to parse `nvidia-smi` output — pynvml covers everything.
-- Don't flip the repo public until at least items 2, 3, 5 are working.
+- ~~Don't flip the repo public until items 2, 3, 5 are working~~ — user opted to make it public at v0.0.2 once the process table shipped.
