@@ -136,7 +136,7 @@ def snapshot() -> str:
 def metrics() -> dict[str, float]:
     """Per-GPU scalar metrics for the history buffer.
 
-    Keys are `gpu{i}.{util|mem_bw|temp|power}`. Each NVML call is
+    Keys: `gpu{i}.{util|mem_bw|temp|power|vram_pct}`. Each NVML call is
     individually fenced so a partial driver still surfaces what it can.
     """
     if not _init():
@@ -147,6 +147,7 @@ def metrics() -> dict[str, float]:
             NVML_TEMPERATURE_GPU,
             nvmlDeviceGetCount,
             nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMemoryInfo,
             nvmlDeviceGetPowerUsage,
             nvmlDeviceGetTemperature,
             nvmlDeviceGetUtilizationRates,
@@ -174,9 +175,45 @@ def metrics() -> dict[str, float]:
                 out[f"gpu{i}.power"] = nvmlDeviceGetPowerUsage(h) / 1000.0
             except Exception:
                 pass
+            try:
+                mem = nvmlDeviceGetMemoryInfo(h)
+                if mem.total > 0:
+                    out[f"gpu{i}.vram_pct"] = 100.0 * mem.used / mem.total
+            except Exception:
+                pass
     except Exception:
         return out
     return out
+
+
+def throttle_masks() -> dict[int, int]:
+    """Per-GPU current throttle-reason bitmask. Empty if no NVML."""
+    if not _init():
+        return {}
+    out: dict[int, int] = {}
+    try:
+        from pynvml import (
+            nvmlDeviceGetCount,
+            nvmlDeviceGetCurrentClocksThrottleReasons,
+            nvmlDeviceGetHandleByIndex,
+        )
+
+        for i in range(nvmlDeviceGetCount()):
+            try:
+                h = nvmlDeviceGetHandleByIndex(i)
+                out[i] = int(
+                    nvmlDeviceGetCurrentClocksThrottleReasons(h) or 0
+                )
+            except Exception:
+                continue
+    except Exception:
+        return out
+    return out
+
+
+def throttle_text(mask: int) -> str:
+    """Public alias for the internal label resolver — used by watchdog."""
+    return _throttle_text(mask)
 
 
 def device_count() -> int:

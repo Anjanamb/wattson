@@ -6,7 +6,15 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.5` — same as v0.0.4 plus a Trends screen with live sparklines for CPU / memory / per-GPU util / temp / power over the last 60 seconds. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.6` — same as v0.0.5 plus a watchdog that logs throttle / OOM / hot-temp / VRAM-pressure events to `~/.wattson/events.jsonl` (JSONL, rate-limited 1 / category / 60 s). Session count surfaces in the header sub-title; the `w` keybinding opens a tailing screen. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+
+### v0.0.6 additions
+
+- **New module** `src/wattson/watchdog.py` — `Watchdog` class with `check(metrics, throttle_masks)` → returns event-count, internal per-category rate limiter (`RATE_LIMIT_SEC = 60`), JSONL writer at `~/.wattson/events.jsonl`. Thresholds are module-level constants (`CPU_TEMP_WARN`, `GPU_TEMP_WARN`, `MEM_PCT_WARN`, etc.) — tunable but not yet exposed via config. Module singleton `WATCHDOG`.
+- **New probe outputs** — `gpu.metrics()` now also emits `gpu{i}.vram_pct`; added `gpu.throttle_masks() -> {gpu_idx: mask}` and a public `gpu.throttle_text(mask) -> str` alias (so the watchdog can resolve reasons without importing the internal `_throttle_text`).
+- **New screen** `WatchdogScreen` in `app.py` — pushed via the new `w` keybinding. Tails the JSONL log (most-recent-first), refreshes every 2 s. Empty-state shows current thresholds and the log path.
+- **Header counter** — `WattsonApp._refresh_all` composes all probe metrics, runs `WATCHDOG.check(...)`, and rewrites `sub_title` to include `⚠ {session_count}` once any event has been logged this session.
+- **Tests** — `tests/test_watchdog.py` exercises threshold logic, severity escalation, rate limiting, throttle-mask events, and the recent-events round-trip. Uses per-test `tmp_path` fixture so tests don't touch the real log file.
 
 ### v0.0.5 additions
 
@@ -85,10 +93,10 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 4. ✅ Throttling alerts — `nvmlDeviceGetCurrentClocksThrottleReasons` (v0.0.3)
 5. 🟡 Process actions — **kill done (v0.0.3)**; priority + CPU-affinity controls still TBD
 6. ⏳ Boost / power-limit (`nvmlDeviceSetPowerManagementLimit`, needs admin)
-7. 🟡 Richer interactive UI — hardware screen (v0.0.4) + sparkline trends screen (v0.0.5); per-GPU drill-in still TBD
+7. 🟡 Richer interactive UI — hardware screen (v0.0.4) + sparkline trends screen (v0.0.5) + watchdog screen (v0.0.6); per-GPU drill-in still TBD
 8. ✅ Background-process ranking with criticality flagging (v0.0.4)
 9. ✅ Full hardware inventory — driver, CUDA, UUID, serial, PCIe gen+width, CPU cache + flags (v0.0.4)
-10. (TBD)
+10. ✅ Watchdog mode — JSONL events on hot temps / memory / VRAM / throttle, with rate limiting and a tailing screen (v0.0.6)
 
 ## Dev workflow
 

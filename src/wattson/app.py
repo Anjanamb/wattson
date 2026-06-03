@@ -1,6 +1,7 @@
 """wattson TUI — 4-stat dashboard, GPU-aware process table with criticality
-markers, kill action, hardware-inventory screen (`i`), and a live trends
-screen with sparklines for CPU / memory / per-GPU metrics (`t`)."""
+markers, kill action, hardware-inventory screen (`i`), live trends with
+sparklines (`t`), and a watchdog that logs throttle / OOM / hot-temp
+events to disk (`w` opens the log)."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from textual.widgets import (
 
 from .history import HISTORY
 from .probes import cpu, disk, gpu, hardware, memory, processes
+from .watchdog import WATCHDOG
 
 
 class StatPanel(Static):
@@ -262,6 +264,65 @@ class TrendsScreen(Screen):
                 continue
 
 
+class WatchdogScreen(Screen):
+    """Tails the watchdog JSONL log; refreshes every 2 s."""
+
+    DEFAULT_CSS = """
+    WatchdogScreen { background: #0b0d10; }
+    WatchdogScreen ScrollableContainer { padding: 1 2; }
+    WatchdogScreen Static#wd-empty {
+        color: #6b7480;
+        padding: 1 2;
+    }
+    WatchdogScreen Static.wd-event {
+        margin: 0 1;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("w",      "app.pop_screen", "Back"),
+        Binding("q",      "app.pop_screen", "Back"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield ScrollableContainer(id="wd-scroll")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "wattson"
+        self.sub_title = f"watchdog · {WATCHDOG.log_path}"
+        self._render()
+        self.set_interval(2.0, self._render)
+
+    def _render(self) -> None:
+        events = WATCHDOG.recent_events(limit=200)
+        scroll = self.query_one("#wd-scroll", ScrollableContainer)
+        scroll.remove_children()
+        if not events:
+            scroll.mount(Static(
+                "No events logged yet.\n"
+                "Thresholds: GPU > 85°C, CPU > 90°C, mem > 90 %, "
+                "VRAM > 90 %, any active throttle reason.\n"
+                f"Log file: {WATCHDOG.log_path}",
+                id="wd-empty",
+            ))
+            return
+        # Most recent first so you don't have to scroll
+        for ev in reversed(events):
+            sev = ev.get("severity", "?")
+            ts = ev.get("ts", "")
+            msg = ev.get("message", "")
+            colour = {"crit": "red", "warn": "yellow"}.get(sev, "white")
+            scroll.mount(Static(
+                f"[{colour}]{sev.upper():<4}[/] "
+                f"[#9aa3ad]{ts}[/]  {msg}",
+                classes="wd-event",
+            ))
+
+
 class WattsonApp(App):
     CSS = """
     Screen { background: #0b0d10; }
@@ -295,6 +356,7 @@ class WattsonApp(App):
         Binding("k", "kill", "Kill"),
         Binding("i", "hardware", "Hardware"),
         Binding("t", "trends", "Trends"),
+        Binding("w", "watchdog", "Watchdog"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -322,6 +384,9 @@ class WattsonApp(App):
 
     def action_trends(self) -> None:
         self.push_screen(TrendsScreen())
+
+    def action_watchdog(self) -> None:
+        self.push_screen(WatchdogScreen())
 
     def action_kill(self) -> None:
         table = self.query_one("#processes-table", ProcessTable)
@@ -355,13 +420,19 @@ class WattsonApp(App):
         except Exception:
             # processes probe is best-effort; keep the rest of the UI alive
             pass
-        # Feed the rolling history buffer used by TrendsScreen. Each probe
-        # decides which scalars it surfaces; missing values are silently
-        # dropped. Best-effort — must not crash the loop.
+        # Feed the rolling history buffer used by TrendsScreen, then run
+        # the watchdog against the combined metrics + GPU throttle masks.
+        # Both are best-effort — must not crash the loop.
         try:
-            HISTORY.add_many(cpu.metrics())
-            HISTORY.add_many(memory.metrics())
-            HISTORY.add_many(gpu.metrics())
+            all_metrics: dict[str, float] = {}
+            all_metrics.update(cpu.metrics())
+            all_metrics.update(memory.metrics())
+            all_metrics.update(gpu.metrics())
+            HISTORY.add_many(all_metrics)
+            WATCHDOG.check(all_metrics, gpu.throttle_masks())
+            count = WATCHDOG.session_count
+            base = "your machine's personal assistant"
+            self.sub_title = f"{base} · ⚠ {count}" if count else base
         except Exception:
             pass
 
