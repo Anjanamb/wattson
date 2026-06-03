@@ -74,23 +74,32 @@ class ProcessTable(DataTable):
         self.clear()
         self._rows_data = rows
         for r in rows:
-            gi, vm = r["gpu_idx"], r["vram_mb"]
-            gpu_str = f"#{gi}" if gi is not None else "—"
-            vram_str = f"{vm:.0f}" if vm is not None else "—"
-            critical = r.get("critical", False)
-            marker = "★ " if critical else "  "
-            name = Text(marker + r["name"][:22])
-            if critical:
-                name.stylize("bold cyan")
-            self.add_row(
-                str(r["pid"]),
-                name,
-                f"{r['cpu_pct']:.1f}",
-                f"{r['mem_mb']:.0f}",
-                gpu_str,
-                vram_str,
-                r["cmdline"],
-            )
+            try:
+                gi, vm = r["gpu_idx"], r["vram_mb"]
+                gpu_str = f"#{gi}" if gi is not None else "—"
+                vram_str = f"{vm:.0f}" if vm is not None else "—"
+                critical = r.get("critical", False)
+                marker = "★ " if critical else "  "
+                name = Text(marker + r["name"][:22])
+                if critical:
+                    name.stylize("bold cyan")
+                # Wrap every cell in Text(...) so DataTable does not try
+                # to parse stray brackets / Rich-markup characters in
+                # cmdlines or process names — Windows in particular has
+                # plenty of those, and a single bad row would otherwise
+                # blank the whole table.
+                self.add_row(
+                    Text(str(r["pid"])),
+                    name,
+                    Text(f"{r['cpu_pct']:.1f}"),
+                    Text(f"{r['mem_mb']:.0f}"),
+                    Text(gpu_str),
+                    Text(vram_str),
+                    Text(r["cmdline"]),
+                )
+            except Exception:
+                # Skip the bad row — never let one row kill the whole table.
+                continue
         if 0 <= cursor_row < self.row_count:
             self.move_cursor(row=cursor_row)
 
@@ -373,6 +382,8 @@ class WattsonApp(App):
     def on_mount(self) -> None:
         self.title = "wattson"
         self.sub_title = "your machine's personal assistant"
+        # De-dup toasts: each `_notify_once(key, ...)` fires at most once.
+        self._notified: set[str] = set()
         self._refresh_all()
         self.set_interval(1.0, self._refresh_all)
 
@@ -409,20 +420,35 @@ class WattsonApp(App):
             self._refresh_all()
         return cb
 
+    def _notify_once(self, key: str, message: str, severity: str) -> None:
+        """Toast `message` only the first time we see this `key` per session,
+        so a recurring per-tick error doesn't spam the corner."""
+        if key in self._notified:
+            return
+        self._notified.add(key)
+        self.notify(message, severity=severity, timeout=8)
+
     def _refresh_all(self) -> None:
+        # Stat panels — each StatPanel.refresh_body already has its own
+        # try/except, so one bad panel can't break the others.
         for panel in self.query(StatPanel):
             panel.refresh_body()
+
+        # Process table — isolated try block so a snapshot/render failure
+        # does not also kill history+watchdog below.
         try:
             rows = processes.snapshot(limit=20)
             self.query_one(
                 "#processes-table", ProcessTable
             ).refresh_rows(rows)
-        except Exception:
-            # processes probe is best-effort; keep the rest of the UI alive
-            pass
-        # Feed the rolling history buffer used by TrendsScreen, then run
-        # the watchdog against the combined metrics + GPU throttle masks.
-        # Both are best-effort — must not crash the loop.
+        except Exception as e:
+            self._notify_once(
+                "processes-error",
+                f"processes probe error: {type(e).__name__}: {e}",
+                "error",
+            )
+
+        # History + watchdog — independent of the process table.
         try:
             all_metrics: dict[str, float] = {}
             all_metrics.update(cpu.metrics())
@@ -433,8 +459,12 @@ class WattsonApp(App):
             count = WATCHDOG.session_count
             base = "your machine's personal assistant"
             self.sub_title = f"{base} · ⚠ {count}" if count else base
-        except Exception:
-            pass
+        except Exception as e:
+            self._notify_once(
+                "metrics-error",
+                f"metrics/watchdog error: {type(e).__name__}: {e}",
+                "error",
+            )
 
 
 def main() -> None:

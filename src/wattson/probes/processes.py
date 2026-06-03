@@ -148,11 +148,10 @@ class ProcessProbe:
                         "critical": critical,
                     }
                 )
-            except (
-                psutil.NoSuchProcess,
-                psutil.AccessDenied,
-                psutil.ZombieProcess,
-            ):
+            except Exception:
+                # Any psutil quirk — NoSuchProcess, AccessDenied,
+                # ZombieProcess, TimeoutExpired, OSError on /proc, etc.
+                # — must never take down the snapshot. Skip and continue.
                 continue
 
         # Forget cached processes that no longer exist
