@@ -1,4 +1,11 @@
-"""CPU probe — usage, frequency, model."""
+"""CPU probe — usage, frequency, model, temperature.
+
+Temperature is best-effort:
+- Linux / FreeBSD: `psutil.sensors_temperatures()` reads /sys/class/hwmon
+- macOS: psutil exposes some Apple Silicon sensors
+- Windows: psutil has no implementation; would need WMI or OpenHardwareMonitor.
+  We report 'n/a' rather than fake a value.
+"""
 
 from __future__ import annotations
 
@@ -29,16 +36,42 @@ def info() -> dict:
     }
 
 
+def _temp() -> str:
+    """Best-effort CPU temperature; returns a human string or 'n/a'."""
+    if not hasattr(psutil, "sensors_temperatures"):
+        return "n/a"
+    try:
+        temps = psutil.sensors_temperatures()
+    except Exception:
+        return "n/a"
+    if not temps:
+        return "n/a"
+    # Prefer well-known package sensors when present
+    for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+        if key in temps and temps[key]:
+            entry = temps[key][0]
+            if entry.current is not None:
+                return f"{entry.current:.0f}°C"
+    # Fall back to the first available chip with a reading
+    for chip_entries in temps.values():
+        for entry in chip_entries:
+            if entry.current is not None:
+                return f"{entry.current:.0f}°C"
+    return "n/a"
+
+
 def snapshot() -> str:
     inf = info()
-    # interval=0 returns the % since the previous call (or 0 on the first call).
+    # interval=0 returns % since the previous call (or 0 on the first call).
     # That's fine for a 1 Hz refresh loop.
     pct = psutil.cpu_percent(interval=0)
     freq = psutil.cpu_freq()
     freq_str = f"{freq.current / 1000:.2f} GHz" if freq and freq.current else "n/a"
+    temp = _temp()
     return (
         f"{inf['brand']}\n"
         f"Cores:  {inf['cores_physical']}P / {inf['cores_logical']}L  ({inf['arch']})\n"
         f"Usage:  {pct:5.1f}%\n"
-        f"Freq:   {freq_str}"
+        f"Freq:   {freq_str}\n"
+        f"Temp:   {temp}"
     )

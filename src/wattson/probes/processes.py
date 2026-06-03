@@ -10,6 +10,8 @@ State carried across snapshots:
   - psutil.Process cache, so `cpu_percent()` deltas are meaningful from
     the second call onwards (the first call after construction always
     returns 0.0 — that's psutil's contract, not a bug).
+
+Also exposes `terminate(pid)` for the TUI's interactive kill action.
 """
 
 from __future__ import annotations
@@ -29,6 +31,11 @@ class ProcessRow(TypedDict):
     gpu_idx: Optional[int]
     vram_mb: Optional[float]
     cmdline: str
+
+
+class TerminateResult(TypedDict):
+    ok: bool
+    message: str
 
 
 class ProcessProbe:
@@ -141,3 +148,17 @@ def snapshot(limit: int = 15) -> list[ProcessRow]:
     if _probe is None:
         _probe = ProcessProbe()
     return _probe.snapshot(limit)
+
+
+def terminate(pid: int) -> TerminateResult:
+    """Best-effort terminate. Returns a structured result for the TUI to
+    surface via Toast — never raises."""
+    try:
+        psutil.Process(pid).terminate()
+        return {"ok": True, "message": f"Sent SIGTERM to PID {pid}"}
+    except psutil.NoSuchProcess:
+        return {"ok": False, "message": f"PID {pid} no longer exists"}
+    except psutil.AccessDenied:
+        return {"ok": False, "message": f"Access denied for PID {pid} (run as admin?)"}
+    except Exception as e:
+        return {"ok": False, "message": f"Failed to terminate {pid}: {e}"}

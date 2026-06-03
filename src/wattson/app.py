@@ -1,11 +1,13 @@
-"""wattson TUI — 4-stat dashboard + GPU-aware process table."""
+"""wattson TUI — 4-stat dashboard + GPU-aware process table + kill action."""
 
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Grid, Vertical
 from textual.reactive import reactive
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
 
 from .probes import cpu, disk, gpu, memory, processes
 
@@ -31,7 +33,15 @@ class StatPanel(Static):
 
 
 class ProcessTable(DataTable):
-    """Top processes by GPU + CPU usage. Refreshed by the parent App."""
+    """Top processes by GPU + CPU usage. Refreshed by the parent App.
+
+    Maintains a parallel `_rows_data` list so the App can map the cursor
+    row back to a structured ProcessRow for actions like kill.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._rows_data: list[dict] = []
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
@@ -44,6 +54,7 @@ class ProcessTable(DataTable):
         # preserve cursor across refreshes
         cursor_row = self.cursor_row
         self.clear()
+        self._rows_data = rows
         for r in rows:
             gi, vm = r["gpu_idx"], r["vram_mb"]
             gpu_str = f"#{gi}" if gi is not None else "—"
@@ -60,6 +71,64 @@ class ProcessTable(DataTable):
         if 0 <= cursor_row < self.row_count:
             self.move_cursor(row=cursor_row)
 
+    def selected(self) -> dict | None:
+        if 0 <= self.cursor_row < len(self._rows_data):
+            return self._rows_data[self.cursor_row]
+        return None
+
+
+class ConfirmKill(ModalScreen[bool]):
+    """Two-button confirmation modal for terminating a process."""
+
+    DEFAULT_CSS = """
+    ConfirmKill {
+        align: center middle;
+    }
+    ConfirmKill > Grid {
+        grid-size: 2;
+        grid-columns: 1fr 1fr;
+        grid-rows: 3 3;
+        grid-gutter: 1 2;
+        padding: 1 2;
+        width: 60;
+        height: 11;
+        border: thick #38bdf8;
+        background: #14171c;
+    }
+    ConfirmKill Label#question {
+        column-span: 2;
+        content-align: center middle;
+        height: 3;
+        color: #e6e8eb;
+    }
+    ConfirmKill Button {
+        width: 100%;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss(False)", "Cancel"),
+        ("y", "dismiss(True)", "Confirm"),
+        ("n", "dismiss(False)", "Cancel"),
+    ]
+
+    def __init__(self, pid: int, name: str) -> None:
+        super().__init__()
+        self.pid = pid
+        self.name = name
+
+    def compose(self) -> ComposeResult:
+        with Grid():
+            yield Label(
+                f"Kill PID {self.pid}  ({self.name})?",
+                id="question",
+            )
+            yield Button("Cancel", variant="primary", id="cancel")
+            yield Button("Kill", variant="error", id="confirm")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
 
 class WattsonApp(App):
     CSS = """
@@ -69,7 +138,7 @@ class WattsonApp(App):
         grid-size: 2 2;
         grid-gutter: 1 1;
         padding: 1 1;
-        height: 20;
+        height: 23;
     }
 
     StatPanel {
@@ -89,8 +158,9 @@ class WattsonApp(App):
     """
 
     BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh"),
+        Binding("q", "quit", "Quit"),
+        Binding("r", "refresh", "Refresh"),
+        Binding("k", "kill", "Kill selected"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -112,6 +182,27 @@ class WattsonApp(App):
 
     def action_refresh(self) -> None:
         self._refresh_all()
+
+    def action_kill(self) -> None:
+        table = self.query_one("#processes-table", ProcessTable)
+        row = table.selected()
+        if row is None:
+            self.notify("No process selected.", severity="warning", timeout=2)
+            return
+        self.push_screen(
+            ConfirmKill(row["pid"], row["name"]),
+            self._make_kill_callback(row["pid"]),
+        )
+
+    def _make_kill_callback(self, pid: int):
+        def cb(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            result = processes.terminate(pid)
+            severity = "warning" if result["ok"] else "error"
+            self.notify(result["message"], severity=severity, timeout=3)
+            self._refresh_all()
+        return cb
 
     def _refresh_all(self) -> None:
         for panel in self.query(StatPanel):

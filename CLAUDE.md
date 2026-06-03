@@ -6,7 +6,15 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.2` — 4-stat dashboard + GPU-aware process table, refreshing at 1 Hz. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.3` — 4-stat dashboard with full thermal/clock/power telemetry, GPU throttle alerts, GPU-aware process table, and an interactive kill action. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+
+### v0.0.3 additions
+
+- **GPU probe** — added clocks (`nvmlDeviceGetClockInfo` for graphics + memory), power draw + cap (`nvmlDeviceGetPowerUsage` / `nvmlDeviceGetPowerManagementLimit`), and active throttle reasons (`nvmlDeviceGetCurrentClocksThrottleReasons`). Each NVML call is individually `_try`-fenced so Optimus laptops and older drivers that omit a field still show the rest. Throttle line surfaces only when present, in yellow Rich markup.
+- **CPU probe** — added best-effort temperature via `psutil.sensors_temperatures()`. Prefers `coretemp`/`k10temp`/`zenpower`/`cpu_thermal`/`acpitz` package sensors; falls back to first available; returns `n/a` on Windows (psutil has no Windows backend — WMI/OpenHardwareMonitor backend is roadmapped).
+- **Kill action** — new `k` binding in `WattsonApp`. Reads the selected row from `ProcessTable.selected()` (the table now mirrors structured rows in `_rows_data` so the cursor maps back to a `ProcessRow`). Pushes a `ConfirmKill` `ModalScreen` (centred 60×11 panel, Cancel/Kill buttons + `y`/`n`/`Esc` bindings). On confirm, calls `processes.terminate(pid)` which is best-effort and returns `{ok, message}`; the app surfaces it via `notify()` toast (warning on success, error on failure).
+- **CSS** — `#stats-grid` height bumped 20 → 23 to fit the GPU panel's 5–6 data lines (name + util/MemBW/temp + VRAM + clock/power + optional throttle).
+- **Probe contract** — unchanged: stat probes still return strings, `processes.snapshot()` still returns `list[ProcessRow]`. The string probes now embed Rich markup (e.g. `[yellow]Throttle:[/]`) so the panel renders coloured fragments.
 
 ### v0.0.2 additions
 
@@ -57,12 +65,12 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 ## Planned features (from the original brief)
 
 1. ✅ Task-manager-style perf (CPU/GPU/Mem/Disk) — v0.0.1
-2. 🟡 `nvidia-smi` output equivalents — **process list done (v0.0.2)**; clocks, power, throttle reasons still TBD
-3. ⏳ Temperatures (CPU temps need `psutil.sensors_temperatures()` on Linux + WMI on Windows)
-4. ⏳ Throttling — `nvmlDeviceGetCurrentClocksThrottleReasons`
-5. ⏳ Kill processes (textual modal + `psutil.Process(pid).terminate()`)
+2. ✅ `nvidia-smi` output equivalents — process list (v0.0.2), clocks + power + throttle reasons (v0.0.3)
+3. 🟡 Temperatures — GPU done (v0.0.1), CPU Linux/Mac done (v0.0.3); Windows CPU temp still needs WMI/OHM backend
+4. ✅ Throttling alerts — `nvmlDeviceGetCurrentClocksThrottleReasons` (v0.0.3)
+5. 🟡 Process actions — **kill done (v0.0.3)**; priority + CPU-affinity controls still TBD
 6. ⏳ Boost / power-limit (`nvmlDeviceSetPowerManagementLimit`, needs admin)
-7. ⏳ Richer interactive UI (per-GPU drill-in screens, sparklines)
+7. ⏳ Richer interactive UI (per-GPU drill-in screens, sparklines of temp/clock/power history)
 8. ⏳ Background-process ranking with criticality flagging
 9. ⏳ Full hardware inventory (PCIe lanes, NVLink, board S/N — `nvmlDeviceGetPciInfo`, `nvmlDeviceGetSerial`)
 10. (TBD)
