@@ -54,3 +54,34 @@ def test_hardware_report_has_three_sections():
     rep = hardware.report()
     assert isinstance(rep, str)
     assert "System" in rep and "CPU" in rep and "GPU" in rep
+
+
+def test_cpu_metrics_returns_cpu_pct():
+    # v0.0.5 — metrics() feeds the rolling history for the Trends screen
+    m = cpu.metrics()
+    assert isinstance(m, dict)
+    assert "cpu.pct" in m and isinstance(m["cpu.pct"], float)
+
+
+def test_memory_metrics_returns_pct():
+    m = memory.metrics()
+    assert "mem.pct" in m and isinstance(m["mem.pct"], float)
+
+
+def test_gpu_metrics_returns_dict():
+    # Empty dict is valid (no NVIDIA driver / no GPUs)
+    m = gpu.metrics()
+    assert isinstance(m, dict)
+
+
+def test_history_ring_buffer():
+    from wattson.history import History
+
+    h = History(capacity=3)
+    h.add("k", 1.0)
+    h.add("k", 2.0)
+    h.add("k", 3.0)
+    h.add("k", 4.0)
+    assert h.get("k") == [2.0, 3.0, 4.0]
+    h.reset()
+    assert h.get("k") == []

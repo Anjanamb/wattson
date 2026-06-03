@@ -66,12 +66,34 @@ def snapshot() -> str:
     # That's fine for a 1 Hz refresh loop.
     pct = psutil.cpu_percent(interval=0)
     freq = psutil.cpu_freq()
-    freq_str = f"{freq.current / 1000:.2f} GHz" if freq and freq.current else "n/a"
-    temp = _temp()
+    freq_str = (
+        f"{freq.current / 1000:.2f} GHz"
+        if freq and freq.current
+        else "n/a"
+    )
+    cores = (
+        f"{inf['cores_physical']}P / "
+        f"{inf['cores_logical']}L  ({inf['arch']})"
+    )
     return (
         f"{inf['brand']}\n"
-        f"Cores:  {inf['cores_physical']}P / {inf['cores_logical']}L  ({inf['arch']})\n"
+        f"Cores:  {cores}\n"
         f"Usage:  {pct:5.1f}%\n"
         f"Freq:   {freq_str}\n"
-        f"Temp:   {temp}"
+        f"Temp:   {_temp()}"
     )
+
+
+def metrics() -> dict[str, float]:
+    """Scalar metrics for the history buffer.
+
+    interval=0 against psutil keeps this cheap (no second blocking call).
+    """
+    out = {"cpu.pct": float(psutil.cpu_percent(interval=0))}
+    temp = _temp()
+    if temp != "n/a" and temp.endswith("°C"):
+        try:
+            out["cpu.temp"] = float(temp.rstrip("°C"))
+        except ValueError:
+            pass
+    return out

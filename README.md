@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.4-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.5-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.4` — full thermal/clock/power telemetry, throttle alerts, interactive kill, hardware-inventory screen, and a criticality marker for training-job processes.
+**Status:** `v0.0.5` — same as v0.0.4 plus a Trends screen with live sparklines for CPU / memory / per-GPU util, temp, and power over the last 60 seconds.
 
 ## Planned features
 
@@ -29,10 +29,10 @@ A terminal UI for the bits of system monitoring that matter when you're running 
 - [x] **Kill selected process** — `k` on a row → confirmation modal → SIGTERM via psutil, with status notification *(v0.0.3)*
 - [x] **Hardware-inventory screen** — `i` opens a full-screen view of driver/CUDA versions, GPU UUID / serial / PCIe gen+width, CPU cache + AVX flags, OS / kernel / Python *(v0.0.4)*
 - [x] **Process criticality flagging** — `★` marker + bold cyan styling on processes that hold VRAM (likely training jobs), sustain CPU > 50 %, or own > 10 % of system memory *(v0.0.4)*
+- [x] **Trends screen** — `t` opens live sparklines for CPU %, memory %, and per-GPU util / temp / power over the last 60 s. Backed by a ring buffer in `wattson.history` *(v0.0.5)*
 
 ### Coming
 
-- [ ] Thermal history (sparkline of temp / clock / power over the last N samples)
 - [ ] Process priority and CPU-affinity controls (from inside the TUI)
 - [ ] GPU power-limit + clock-offset controls (`nvmlDeviceSetPowerManagementLimit`, needs admin)
 - [ ] Watchdog mode — log alerts to disk when training jobs throttle, OOM, or crash
@@ -58,6 +58,7 @@ Inside the TUI:
 - `↑` / `↓` — move the row cursor in the process table
 - `k` — kill the selected process (with a confirmation modal — `y` / `n` / `Esc`)
 - `i` — open the hardware-inventory screen (`i` / `q` / `Esc` to return)
+- `t` — open the live trends screen (`t` / `q` / `Esc` to return)
 
 ## Why "wattson"?
 

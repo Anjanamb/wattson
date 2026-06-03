@@ -6,7 +6,15 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.4` — full thermal/clock/power telemetry, GPU throttle alerts, GPU-aware process table with criticality markers, kill action, and a dedicated hardware-inventory screen. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.5` — same as v0.0.4 plus a Trends screen with live sparklines for CPU / memory / per-GPU util / temp / power over the last 60 seconds. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+
+### v0.0.5 additions
+
+- **New module** `src/wattson/history.py` — `History` ring-buffer class with auto-create-on-first-write semantics so probes don't have to register. Module-level singleton `HISTORY` with capacity = 60 (= 1 minute at the 1 Hz refresh).
+- **New probe entrypoint** `metrics() -> dict[str, float]` on each of cpu / memory / gpu. Returns the scalar values that the TrendsScreen plots. Keys: `cpu.pct`, `cpu.temp` (if available), `mem.pct`, `swap.pct`, and per-GPU `gpu{i}.util`, `gpu{i}.mem_bw`, `gpu{i}.temp`, `gpu{i}.power`. Each call individually try-fenced so a partial driver still surfaces what it can.
+- **New screen** `TrendsScreen` in `app.py` — pushed via the new `t` keybinding. Renders one Textual `Sparkline` per metric inside a `ScrollableContainer`; per-GPU series count is determined by `gpu.device_count()` at compose time. The screen has its own 1 Hz `set_interval` so sparklines redraw smoothly while the parent app keeps populating `HISTORY` in the background.
+- **History wiring** — `_refresh_all()` in `WattsonApp` calls `HISTORY.add_many(probe.metrics())` for cpu / memory / gpu each tick. Best-effort: probes don't have to know the buffer exists.
+- **Lint pass** — folded several pre-existing > 79-char lines in cpu / memory / gpu probes that the IDE's default pycodestyle was flagging. Project's ruff config still allows 100, but staying under 79 keeps both linters quiet.
 
 ### v0.0.4 additions
 
@@ -77,7 +85,7 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 4. ✅ Throttling alerts — `nvmlDeviceGetCurrentClocksThrottleReasons` (v0.0.3)
 5. 🟡 Process actions — **kill done (v0.0.3)**; priority + CPU-affinity controls still TBD
 6. ⏳ Boost / power-limit (`nvmlDeviceSetPowerManagementLimit`, needs admin)
-7. 🟡 Richer interactive UI — **hardware screen done (v0.0.4)**; per-GPU drill-in + sparkline history still TBD
+7. 🟡 Richer interactive UI — hardware screen (v0.0.4) + sparkline trends screen (v0.0.5); per-GPU drill-in still TBD
 8. ✅ Background-process ranking with criticality flagging (v0.0.4)
 9. ✅ Full hardware inventory — driver, CUDA, UUID, serial, PCIe gen+width, CPU cache + flags (v0.0.4)
 10. (TBD)

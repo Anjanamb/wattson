@@ -54,7 +54,10 @@ def _throttle_text(mask: int) -> str:
 
 def snapshot() -> str:
     if not _init():
-        return "No NVIDIA GPU / driver detected.\n(install driver and nvidia-ml-py)"
+        return (
+            "No NVIDIA GPU / driver detected.\n"
+            "(install driver and nvidia-ml-py)"
+        )
     try:
         from pynvml import (
             NVML_CLOCK_GRAPHICS,
@@ -97,7 +100,9 @@ def snapshot() -> str:
             mclk = _try(nvmlDeviceGetClockInfo, h, NVML_CLOCK_MEM)
             pwr_mw = _try(nvmlDeviceGetPowerUsage, h)
             pcap_mw = _try(nvmlDeviceGetPowerManagementLimit, h)
-            throttle_mask = _try(nvmlDeviceGetCurrentClocksThrottleReasons, h) or 0
+            throttle_mask = (
+                _try(nvmlDeviceGetCurrentClocksThrottleReasons, h) or 0
+            )
 
             clk = (f"{gclk}/{mclk} MHz" if gclk and mclk
                    else f"{gclk} MHz" if gclk
@@ -109,9 +114,13 @@ def snapshot() -> str:
             else:
                 pwr = "n/a"
 
+            head = (
+                f"  Util:  {util.gpu:3d}% · "
+                f"MemBW: {util.memory:3d}% · {temp}°C"
+            )
             block = (
                 f"GPU{i}: {name}\n"
-                f"  Util:  {util.gpu:3d}% · MemBW: {util.memory:3d}% · {temp}°C\n"
+                f"{head}\n"
                 f"  VRAM:  {_gb(mem.used):5.1f} / {_gb(mem.total):5.1f} GB\n"
                 f"  Clock: {clk}  ·  Power: {pwr}"
             )
@@ -122,3 +131,61 @@ def snapshot() -> str:
         return "\n\n".join(out)
     except Exception as e:
         return f"NVML error: {e}"
+
+
+def metrics() -> dict[str, float]:
+    """Per-GPU scalar metrics for the history buffer.
+
+    Keys are `gpu{i}.{util|mem_bw|temp|power}`. Each NVML call is
+    individually fenced so a partial driver still surfaces what it can.
+    """
+    if not _init():
+        return {}
+    out: dict[str, float] = {}
+    try:
+        from pynvml import (
+            NVML_TEMPERATURE_GPU,
+            nvmlDeviceGetCount,
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetPowerUsage,
+            nvmlDeviceGetTemperature,
+            nvmlDeviceGetUtilizationRates,
+        )
+
+        n = nvmlDeviceGetCount()
+        for i in range(n):
+            try:
+                h = nvmlDeviceGetHandleByIndex(i)
+            except Exception:
+                continue
+            try:
+                util = nvmlDeviceGetUtilizationRates(h)
+                out[f"gpu{i}.util"] = float(util.gpu)
+                out[f"gpu{i}.mem_bw"] = float(util.memory)
+            except Exception:
+                pass
+            try:
+                out[f"gpu{i}.temp"] = float(
+                    nvmlDeviceGetTemperature(h, NVML_TEMPERATURE_GPU)
+                )
+            except Exception:
+                pass
+            try:
+                out[f"gpu{i}.power"] = nvmlDeviceGetPowerUsage(h) / 1000.0
+            except Exception:
+                pass
+    except Exception:
+        return out
+    return out
+
+
+def device_count() -> int:
+    """Return the number of NVIDIA devices (0 if no driver / no GPUs)."""
+    if not _init():
+        return 0
+    try:
+        from pynvml import nvmlDeviceGetCount
+
+        return int(nvmlDeviceGetCount())
+    except Exception:
+        return 0

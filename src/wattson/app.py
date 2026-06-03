@@ -1,5 +1,6 @@
 """wattson TUI — 4-stat dashboard, GPU-aware process table with criticality
-markers, kill action, and a hardware-inventory screen (press `i`)."""
+markers, kill action, hardware-inventory screen (`i`), and a live trends
+screen with sparklines for CPU / memory / per-GPU metrics (`t`)."""
 
 from __future__ import annotations
 
@@ -9,8 +10,17 @@ from textual.binding import Binding
 from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, DataTable, Footer, Header, Label, Static
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Label,
+    Sparkline,
+    Static,
+)
 
+from .history import HISTORY
 from .probes import cpu, disk, gpu, hardware, memory, processes
 
 
@@ -175,6 +185,83 @@ class HardwareScreen(Screen):
             return f"[red]hardware probe failed:[/red] {e}"
 
 
+class TrendsScreen(Screen):
+    """Live sparklines for the metrics in HISTORY.
+
+    Reads metric series from the singleton History buffer on a 1-second
+    timer, while the parent app keeps populating it via _refresh_all().
+    GPU rows are emitted dynamically based on `gpu.device_count()`.
+    """
+
+    DEFAULT_CSS = """
+    TrendsScreen { background: #0b0d10; }
+    TrendsScreen ScrollableContainer {
+        padding: 1 2;
+    }
+    TrendsScreen Label.trend-label {
+        color: #9aa3ad;
+        margin: 1 1 0 1;
+        height: 1;
+    }
+    TrendsScreen Sparkline {
+        margin: 0 1 0 1;
+        height: 3;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("t",      "app.pop_screen", "Back"),
+        Binding("q",      "app.pop_screen", "Back"),
+    ]
+
+    # (history-key, widget-id, human label)
+    _SERIES_CORE = [
+        ("cpu.pct",  "spark-cpu-pct",  "CPU usage  (%)"),
+        ("cpu.temp", "spark-cpu-temp", "CPU temp   (°C)"),
+        ("mem.pct",  "spark-mem-pct",  "Memory     (%)"),
+    ]
+
+    def _series(self) -> list[tuple[str, str, str]]:
+        series = list(self._SERIES_CORE)
+        for i in range(gpu.device_count()):
+            series += [
+                (f"gpu{i}.util",  f"spark-gpu{i}-util",
+                 f"GPU{i} util   (%)"),
+                (f"gpu{i}.temp",  f"spark-gpu{i}-temp",
+                 f"GPU{i} temp   (°C)"),
+                (f"gpu{i}.power", f"spark-gpu{i}-power",
+                 f"GPU{i} power  (W)"),
+            ]
+        return series
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with ScrollableContainer():
+            for _key, wid, label in self._series():
+                yield Label(label, classes="trend-label")
+                yield Sparkline([0.0], id=wid)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "wattson"
+        self.sub_title = "trends · last 60 s"
+        self._refresh()
+        self.set_interval(1.0, self._refresh)
+
+    def _refresh(self) -> None:
+        for key, wid, _label in self._series():
+            data = HISTORY.get(key)
+            try:
+                sparkline = self.query_one(f"#{wid}", Sparkline)
+                # Sparkline rendering doesn't like an empty list — feed it
+                # a single zero so the widget paints a flat baseline.
+                sparkline.data = data if data else [0.0]
+            except Exception:
+                # The widget might not be mounted yet; tick again next time.
+                continue
+
+
 class WattsonApp(App):
     CSS = """
     Screen { background: #0b0d10; }
@@ -205,8 +292,9 @@ class WattsonApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("k", "kill", "Kill selected"),
-        Binding("i", "hardware", "Hardware info"),
+        Binding("k", "kill", "Kill"),
+        Binding("i", "hardware", "Hardware"),
+        Binding("t", "trends", "Trends"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -231,6 +319,9 @@ class WattsonApp(App):
 
     def action_hardware(self) -> None:
         self.push_screen(HardwareScreen())
+
+    def action_trends(self) -> None:
+        self.push_screen(TrendsScreen())
 
     def action_kill(self) -> None:
         table = self.query_one("#processes-table", ProcessTable)
@@ -258,9 +349,20 @@ class WattsonApp(App):
             panel.refresh_body()
         try:
             rows = processes.snapshot(limit=20)
-            self.query_one("#processes-table", ProcessTable).refresh_rows(rows)
+            self.query_one(
+                "#processes-table", ProcessTable
+            ).refresh_rows(rows)
         except Exception:
             # processes probe is best-effort; keep the rest of the UI alive
+            pass
+        # Feed the rolling history buffer used by TrendsScreen. Each probe
+        # decides which scalars it surfaces; missing values are silently
+        # dropped. Best-effort — must not crash the loop.
+        try:
+            HISTORY.add_many(cpu.metrics())
+            HISTORY.add_many(memory.metrics())
+            HISTORY.add_many(gpu.metrics())
+        except Exception:
             pass
 
 
