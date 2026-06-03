@@ -1,15 +1,17 @@
-"""wattson TUI — 4-stat dashboard + GPU-aware process table + kill action."""
+"""wattson TUI — 4-stat dashboard, GPU-aware process table with criticality
+markers, kill action, and a hardware-inventory screen (press `i`)."""
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, ScrollableContainer, Vertical
 from textual.reactive import reactive
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Header, Label, Static
 
-from .probes import cpu, disk, gpu, memory, processes
+from .probes import cpu, disk, gpu, hardware, memory, processes
 
 
 class StatPanel(Static):
@@ -37,6 +39,10 @@ class ProcessTable(DataTable):
 
     Maintains a parallel `_rows_data` list so the App can map the cursor
     row back to a structured ProcessRow for actions like kill.
+
+    Rows marked `critical` (holds VRAM, sustained high CPU, or memory hog)
+    get a leading ★ and are styled bold cyan so training/inference jobs
+    jump off the screen at a glance.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -59,9 +65,14 @@ class ProcessTable(DataTable):
             gi, vm = r["gpu_idx"], r["vram_mb"]
             gpu_str = f"#{gi}" if gi is not None else "—"
             vram_str = f"{vm:.0f}" if vm is not None else "—"
+            critical = r.get("critical", False)
+            marker = "★ " if critical else "  "
+            name = Text(marker + r["name"][:22])
+            if critical:
+                name.stylize("bold cyan")
             self.add_row(
                 str(r["pid"]),
-                r["name"][:24],
+                name,
                 f"{r['cpu_pct']:.1f}",
                 f"{r['mem_mb']:.0f}",
                 gpu_str,
@@ -130,6 +141,40 @@ class ConfirmKill(ModalScreen[bool]):
         self.dismiss(event.button.id == "confirm")
 
 
+class HardwareScreen(Screen):
+    """Full-screen hardware inventory. Scrollable when content overflows."""
+
+    DEFAULT_CSS = """
+    HardwareScreen { background: #0b0d10; }
+    HardwareScreen ScrollableContainer {
+        padding: 1 2;
+    }
+    HardwareScreen Static#hw-report {
+        color: #e6e8eb;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("i",      "app.pop_screen", "Back"),
+        Binding("q",      "app.pop_screen", "Back"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with ScrollableContainer():
+            yield Static(self._safe_report(), id="hw-report")
+        yield Footer()
+
+    @staticmethod
+    def _safe_report() -> str:
+        try:
+            return hardware.report()
+        except Exception as e:
+            return f"[red]hardware probe failed:[/red] {e}"
+
+
 class WattsonApp(App):
     CSS = """
     Screen { background: #0b0d10; }
@@ -161,6 +206,7 @@ class WattsonApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("k", "kill", "Kill selected"),
+        Binding("i", "hardware", "Hardware info"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -182,6 +228,9 @@ class WattsonApp(App):
 
     def action_refresh(self) -> None:
         self._refresh_all()
+
+    def action_hardware(self) -> None:
+        self.push_screen(HardwareScreen())
 
     def action_kill(self) -> None:
         table = self.query_one("#processes-table", ProcessTable)

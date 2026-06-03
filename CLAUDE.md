@@ -6,7 +6,14 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.3` — 4-stat dashboard with full thermal/clock/power telemetry, GPU throttle alerts, GPU-aware process table, and an interactive kill action. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.4` — full thermal/clock/power telemetry, GPU throttle alerts, GPU-aware process table with criticality markers, kill action, and a dedicated hardware-inventory screen. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+
+### v0.0.4 additions
+
+- **New probe** `src/wattson/probes/hardware.py` — `report()` returns a Rich-markup multi-section string (System / CPU / GPU). Pulls driver + CUDA version (`nvmlSystemGetDriverVersion`, `nvmlSystemGetCudaDriverVersion`), per-GPU UUID + serial (`nvmlDeviceGetUUID` / `GetSerial` — serial often n/a without admin), PCIe gen + width (current vs max), CPU cache sizes + notable flags (avx, avx2, avx512f, sha_ni), OS / kernel / Python info. Each NVML call individually `_try`-fenced for partial-info drivers.
+- **New screen** `HardwareScreen` in `app.py` — full-screen, scrollable, pushed by the new `i` keybinding. `Esc` / `q` / `i` all pop back to the dashboard.
+- **Process criticality** — `ProcessRow` gained a `critical: bool`. Heuristic: `holds_vram OR (cpu_pct > 50 AND name not in _IDLE_NAMES) OR (mem / total > 0.10)`. `_IDLE_NAMES` filters out `System Idle Process`, `System`, `Idle`, `kernel_task`, `swapper`, `kworker`.
+- **ProcessTable visual** — critical rows render with a `★` prefix and bold cyan via `rich.text.Text.stylize`. Non-critical rows get a two-space prefix to keep column alignment.
 
 ### v0.0.3 additions
 
@@ -70,9 +77,9 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 4. ✅ Throttling alerts — `nvmlDeviceGetCurrentClocksThrottleReasons` (v0.0.3)
 5. 🟡 Process actions — **kill done (v0.0.3)**; priority + CPU-affinity controls still TBD
 6. ⏳ Boost / power-limit (`nvmlDeviceSetPowerManagementLimit`, needs admin)
-7. ⏳ Richer interactive UI (per-GPU drill-in screens, sparklines of temp/clock/power history)
-8. ⏳ Background-process ranking with criticality flagging
-9. ⏳ Full hardware inventory (PCIe lanes, NVLink, board S/N — `nvmlDeviceGetPciInfo`, `nvmlDeviceGetSerial`)
+7. 🟡 Richer interactive UI — **hardware screen done (v0.0.4)**; per-GPU drill-in + sparkline history still TBD
+8. ✅ Background-process ranking with criticality flagging (v0.0.4)
+9. ✅ Full hardware inventory — driver, CUDA, UUID, serial, PCIe gen+width, CPU cache + flags (v0.0.4)
 10. (TBD)
 
 ## Dev workflow

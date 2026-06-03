@@ -1,4 +1,5 @@
-"""Process probe — top processes by resource use, with GPU attribution.
+"""Process probe — top processes by resource use, with GPU attribution
+and criticality flagging.
 
 Unlike the v0 string-returning probes, this one returns structured rows
 so the TUI can render them in a DataTable. Reasoning is documented in
@@ -10,6 +11,11 @@ State carried across snapshots:
   - psutil.Process cache, so `cpu_percent()` deltas are meaningful from
     the second call onwards (the first call after construction always
     returns 0.0 — that's psutil's contract, not a bug).
+
+Criticality (v0.0.4): a row is flagged `critical: True` if it
+  - holds any VRAM (almost certainly a training/inference workload), OR
+  - has CPU% > 50 and is not one of the OS "idle"/scheduler PIDs, OR
+  - holds > 10% of system memory.
 
 Also exposes `terminate(pid)` for the TUI's interactive kill action.
 """
@@ -23,6 +29,17 @@ import psutil
 from .gpu import _init as _gpu_init
 
 
+# Process names that show up as "high CPU" but aren't real workloads.
+_IDLE_NAMES = {
+    "System Idle Process",
+    "System",
+    "Idle",
+    "kernel_task",
+    "swapper",
+    "kworker",
+}
+
+
 class ProcessRow(TypedDict):
     pid: int
     name: str
@@ -31,6 +48,7 @@ class ProcessRow(TypedDict):
     gpu_idx: Optional[int]
     vram_mb: Optional[float]
     cmdline: str
+    critical: bool
 
 
 class TerminateResult(TypedDict):
@@ -75,7 +93,8 @@ class ProcessProbe:
                 h = nvmlDeviceGetHandleByIndex(i)
                 for p in nvmlDeviceGetComputeRunningProcesses(h):
                     # usedGpuMemory is None on some drivers; treat as 0
-                    vram_mb = (getattr(p, "usedGpuMemory", None) or 0) / (1024 * 1024)
+                    raw = getattr(p, "usedGpuMemory", None) or 0
+                    vram_mb = raw / (1024 * 1024)
                     # If a process spans multiple GPUs, keep the largest
                     prev = out.get(p.pid)
                     if prev is None or vram_mb > prev[1]:
@@ -86,6 +105,7 @@ class ProcessProbe:
 
     def snapshot(self, limit: int = 15) -> list[ProcessRow]:
         gpu_procs = self._collect_gpu_processes()
+        total_mem_mb = psutil.virtual_memory().total / (1024 * 1024)
 
         current: dict[int, psutil.Process] = {}
         rows: list[ProcessRow] = []
@@ -110,6 +130,12 @@ class ProcessProbe:
                 gpu_idx = gpu_info[0] if gpu_info else None
                 vram_mb = gpu_info[1] if gpu_info else None
 
+                holds_vram = vram_mb is not None and vram_mb > 0.0
+                is_idle = name in _IDLE_NAMES
+                high_cpu = cpu_pct > 50.0 and not is_idle
+                high_mem = total_mem_mb > 0 and (mem_mb / total_mem_mb) > 0.10
+                critical = holds_vram or high_cpu or high_mem
+
                 rows.append(
                     {
                         "pid": pid,
@@ -119,9 +145,14 @@ class ProcessProbe:
                         "gpu_idx": gpu_idx,
                         "vram_mb": vram_mb,
                         "cmdline": cmdline,
+                        "critical": critical,
                     }
                 )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+                psutil.ZombieProcess,
+            ):
                 continue
 
         # Forget cached processes that no longer exist
@@ -130,7 +161,7 @@ class ProcessProbe:
         # GPU processes first (sorted by VRAM desc), then everyone else by CPU%
         rows.sort(
             key=lambda r: (
-                r["vram_mb"] is None,           # False (has VRAM) sorts before True
+                r["vram_mb"] is None,    # False (has VRAM) sorts first
                 -(r["vram_mb"] or 0.0),
                 -r["cpu_pct"],
                 -r["mem_mb"],
@@ -159,6 +190,7 @@ def terminate(pid: int) -> TerminateResult:
     except psutil.NoSuchProcess:
         return {"ok": False, "message": f"PID {pid} no longer exists"}
     except psutil.AccessDenied:
-        return {"ok": False, "message": f"Access denied for PID {pid} (run as admin?)"}
+        msg = f"Access denied for PID {pid} (run as admin?)"
+        return {"ok": False, "message": msg}
     except Exception as e:
         return {"ok": False, "message": f"Failed to terminate {pid}: {e}"}
