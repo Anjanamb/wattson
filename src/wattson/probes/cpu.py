@@ -36,27 +36,71 @@ def info() -> dict:
     }
 
 
-def _temp() -> str:
-    """Best-effort CPU temperature; returns a human string or 'n/a'."""
+def _temp_psutil() -> str | None:
+    """Linux / FreeBSD / macOS via psutil. Returns None when nothing works."""
     if not hasattr(psutil, "sensors_temperatures"):
-        return "n/a"
+        return None
     try:
         temps = psutil.sensors_temperatures()
     except Exception:
-        return "n/a"
+        return None
     if not temps:
-        return "n/a"
-    # Prefer well-known package sensors when present
+        return None
     for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
         if key in temps and temps[key]:
             entry = temps[key][0]
             if entry.current is not None:
                 return f"{entry.current:.0f}°C"
-    # Fall back to the first available chip with a reading
     for chip_entries in temps.values():
         for entry in chip_entries:
             if entry.current is not None:
                 return f"{entry.current:.0f}°C"
+    return None
+
+
+def _temp_wmi() -> str | None:
+    """Windows ACPI thermal zone via WMI. Many modern laptops don't
+    expose this in ACPI (the temp lives in EC registers behind vendor
+    drivers); for those a future LibreHardwareMonitor backend would be
+    the proper answer."""
+    try:
+        import wmi  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        w = wmi.WMI(namespace="root\\wmi")
+        zones = w.MSAcpi_ThermalZoneTemperature()
+    except Exception:
+        return None
+    if not zones:
+        return None
+    try:
+        # CurrentTemperature is in tenths of Kelvin
+        kelvin = zones[0].CurrentTemperature / 10.0
+        celsius = kelvin - 273.15
+        if -50 < celsius < 200:
+            return f"{celsius:.0f}°C"
+    except Exception:
+        pass
+    return None
+
+
+def _temp() -> str:
+    """Best-effort CPU temperature; returns a human string or 'n/a'.
+
+    Order: psutil sensors (Linux/macOS) → WMI ACPI thermal zone
+    (Windows). Falls back to 'n/a' on platforms / hardware where
+    neither works.
+    """
+    import sys
+
+    t = _temp_psutil()
+    if t is not None:
+        return t
+    if sys.platform == "win32":
+        t = _temp_wmi()
+        if t is not None:
+            return t
     return "n/a"
 
 

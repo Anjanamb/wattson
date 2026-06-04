@@ -6,7 +6,15 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.8` — bug-fix + Trends-rework release. `k` (kill) and `n` (priority) used to crash with `AttributeError: property 'name' of '...' object has no setter` because both modals stored the process name in `self.name`, which is a read-only property on Textual's Widget base class. Renamed to `self.proc_name`. Trends screen now surfaces current / min / max values per metric and uses per-category colours (CPU cyan · GPU green · mem blue · temps yellow→red · power violet) so each row is interpretable at a glance instead of being a sea of identical blue bars.
+`v0.0.9` — Trends screen migrated from `Sparkline` (bar chart) to `textual_plotext.PlotextPlot` (real braille line charts) on user request; CPU panel learned a Windows WMI fallback for ACPI thermal zones, so `Temp:` is no longer permanently `n/a` on Windows boxes where ACPI exposes a thermal zone.
+
+### v0.0.9 additions
+
+- **New dep** `textual-plotext>=0.2` (which pulls in `plotext`). Wraps plotext as a Textual widget; we use `marker="braille"` for high-resolution lines.
+- **New dep** `wmi>=1.5; sys_platform == 'win32'` — platform-conditional, only installed on Windows.
+- **probes/cpu.py — Windows temperature fallback** — `_temp()` now tries `_temp_psutil()` first, then `_temp_wmi()` on `sys.platform == "win32"`. `_temp_wmi()` queries `MSAcpi_ThermalZoneTemperature` (CurrentTemperature is in tenths of Kelvin → °C); sanity-checks the value (-50 to 200 °C) and returns `None` if anything's off. Many modern laptops don't expose CPU temp in ACPI — the next step there is a LibreHardwareMonitor backend, noted in README "Coming".
+- **TrendsScreen rewrite** — `Sparkline` widgets replaced with `PlotextPlot`. Per-tick refresh: `plot.plt.clear_figure()` → `plot.plt.plot(xs, data, marker="braille", color=…)` → `plt.theme("dark")` → `plot.refresh()`. plotext takes named colours directly (`"cyan"`, `"red"`, `"blue"`, `"green"`, `"magenta"`) so the CSS pseudo-element gymnastics from v0.0.8 are gone. PlotextPlot height = 7; with 6 series for a single-GPU rig that's ~48 rows, scrollable.
+- **CSS gotcha cleared up:** with `Sparkline` you had to nest `> .sparkline--max-color { color: ...; }` inside a class selector to colour each bar. `PlotextPlot` accepts the colour through plt API — no descendant selector needed.
 
 ### v0.0.8 additions / fixes
 

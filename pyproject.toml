@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wattson"
-version = "0.0.8"
+version = "0.0.9"
 description = "Your machine's personal assistant — DL-workload-aware system monitor"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,9 +25,11 @@ classifiers = [
 ]
 dependencies = [
   "textual>=0.50",
+  "textual-plotext>=0.2",
   "psutil>=5.9",
   "py-cpuinfo>=9.0",
   "nvidia-ml-py>=12.535",
+  "wmi>=1.5; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

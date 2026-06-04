@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.8-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.9-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.8` — same feature set as v0.0.7, with two crash fixes (`k`, `n`) and a Trends-screen rework that surfaces current / min / max values per metric and colour-codes each series.
+**Status:** `v0.0.9` — Trends screen now uses real braille **line charts** (via `textual-plotext` / `plotext`) instead of sparkline bars, and **Windows CPU temperature** is read from WMI ACPI thermal zones when psutil has no Windows backend.
 
 ## Planned features
 
@@ -33,13 +33,15 @@ A terminal UI for the bits of system monitoring that matter when you're running 
 - [x] **Watchdog mode** — each tick, threshold checks for hot CPU/GPU, memory pressure, VRAM pressure, and active GPU throttle reasons. Events go to `~/.wattson/events.jsonl` (JSONL, rate-limited 1 / category / 60 s); session count surfaces in the header sub-title; `w` opens the tailing screen *(v0.0.6)*
 - [x] **Process priority control** — `n` on the selected row opens Low / Normal / High buttons (or `l` / `n` / `h` shortcuts); psutil maps to nice values on Unix and PRIORITY_CLASS on Windows. High typically needs admin and surfaces an `Access denied` toast *(v0.0.7)*
 - [x] **GPU power-limit control** — `p` opens a modal showing the current draw / cap / driver-reported min–max range and accepts a target wattage. Apply requires admin; failure path surfaces a clear error toast *(v0.0.7)*
+- [x] **Line-chart Trends** — `t` now renders real braille line charts via `textual-plotext` / `plotext` rather than sparkline bars. Per-metric colours (CPU cyan · GPU green · memory blue · temps red · power magenta) with current / min / max in each row's label *(v0.0.9)*
+- [x] **Windows CPU temperature** — falls back to WMI `MSAcpi_ThermalZoneTemperature` when psutil has no Windows backend. (Works on systems with ACPI thermal zones; modern laptops often need LibreHardwareMonitor — TBD.) *(v0.0.9)*
 
 ### Coming
 
 - [ ] CPU-affinity controls (currently priority only)
 - [ ] Per-GPU drill-in screen (focus on one GPU at a time, with picker for the power-limit dialog on multi-GPU rigs)
 - [ ] Multi-host — watch a small training cluster from one terminal
-- [ ] Windows CPU temperature via WMI / OpenHardwareMonitor
+- [ ] LibreHardwareMonitor backend for richer Windows temperatures (modern laptops hide CPU temp behind vendor EC; LHM exposes it via its own WMI namespace)
 
 ## Install (dev)
 

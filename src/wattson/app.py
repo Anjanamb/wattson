@@ -18,9 +18,9 @@ from textual.widgets import (
     Header,
     Input,
     Label,
-    Sparkline,
     Static,
 )
+from textual_plotext import PlotextPlot
 
 from .history import HISTORY
 from .probes import cpu, disk, gpu, hardware, memory, processes
@@ -342,14 +342,17 @@ class HardwareScreen(Screen):
 
 
 class TrendsScreen(Screen):
-    """Live sparklines for the metrics in HISTORY.
+    """Live line charts for the metrics in HISTORY.
 
-    Each row is one Static label + one Sparkline. The label is updated
-    every tick with the current value, min, and max from the buffer so
-    the otherwise relative-scaled sparkline becomes interpretable at a
-    glance. Per-metric CSS classes drive the colour scheme — CPU is
-    cyan, GPU green, memory blue, temperatures yellow→red, power
-    violet — so multiple GPU rows aren't a sea of identical bars.
+    Each row is one Static label + one textual_plotext.PlotextPlot.
+    The label is updated every tick with the current value, min, and
+    max from the buffer (so absolute readings are still visible) and
+    the chart is redrawn with a braille-marker line — a real line
+    chart rather than the v0.0.7-style sparkline bars.
+
+    Per-series colours: CPU cyan · GPU green · memory blue ·
+    temperatures red · power magenta. plotext takes named colours
+    directly via plt.plot(color=...), so no CSS plumbing this time.
     """
 
     DEFAULT_CSS = """
@@ -361,23 +364,10 @@ class TrendsScreen(Screen):
         height: 1;
         color: #e6e8eb;
     }
-    TrendsScreen Sparkline {
+    TrendsScreen PlotextPlot {
         margin: 0 1 0 1;
-        height: 4;
+        height: 7;
     }
-
-    /* Per-metric colour themes — Textual's Sparkline reads
-       .sparkline--max-color / --min-color from descendant CSS. */
-    TrendsScreen Sparkline.cpu-color   > .sparkline--max-color { color: #00e5ff; }
-    TrendsScreen Sparkline.cpu-color   > .sparkline--min-color { color: #006171; }
-    TrendsScreen Sparkline.gpu-color   > .sparkline--max-color { color: #86efac; }
-    TrendsScreen Sparkline.gpu-color   > .sparkline--min-color { color: #166534; }
-    TrendsScreen Sparkline.mem-color   > .sparkline--max-color { color: #7dd3fc; }
-    TrendsScreen Sparkline.mem-color   > .sparkline--min-color { color: #075985; }
-    TrendsScreen Sparkline.temp-color  > .sparkline--max-color { color: #f87171; }
-    TrendsScreen Sparkline.temp-color  > .sparkline--min-color { color: #92400e; }
-    TrendsScreen Sparkline.power-color > .sparkline--max-color { color: #c084fc; }
-    TrendsScreen Sparkline.power-color > .sparkline--min-color { color: #4338ca; }
     """
 
     BINDINGS = [
@@ -386,11 +376,11 @@ class TrendsScreen(Screen):
         Binding("q",      "app.pop_screen", "Back"),
     ]
 
-    # (history-key, widget-base-id, human label, colour-class, unit)
+    # (history-key, widget-base-id, human label, plotext-colour, unit)
     _SERIES_CORE: list[tuple[str, str, str, str, str]] = [
-        ("cpu.pct",  "cpu-pct",  "CPU usage", "cpu-color",  "%"),
-        ("cpu.temp", "cpu-temp", "CPU temp",  "temp-color", "°C"),
-        ("mem.pct",  "mem-pct",  "Memory",    "mem-color",  "%"),
+        ("cpu.pct",  "cpu-pct",  "CPU usage", "cyan",    "%"),
+        ("cpu.temp", "cpu-temp", "CPU temp",  "red",     "°C"),
+        ("mem.pct",  "mem-pct",  "Memory",    "blue",    "%"),
     ]
 
     def _series(self) -> list[tuple[str, str, str, str, str]]:
@@ -398,22 +388,20 @@ class TrendsScreen(Screen):
         for i in range(gpu.device_count()):
             series += [
                 (f"gpu{i}.util",  f"gpu{i}-util",
-                 f"GPU{i} util",  "gpu-color",   "%"),
+                 f"GPU{i} util",  "green",   "%"),
                 (f"gpu{i}.temp",  f"gpu{i}-temp",
-                 f"GPU{i} temp",  "temp-color",  "°C"),
+                 f"GPU{i} temp",  "red",     "°C"),
                 (f"gpu{i}.power", f"gpu{i}-power",
-                 f"GPU{i} power", "power-color", "W"),
+                 f"GPU{i} power", "magenta", "W"),
             ]
         return series
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with ScrollableContainer():
-            for _key, wid, _label, colour, _unit in self._series():
+            for _key, wid, _label, _colour, _unit in self._series():
                 yield Static("", id=f"label-{wid}", classes="trend-label")
-                yield Sparkline(
-                    [0.0], id=f"spark-{wid}", classes=f"{colour}",
-                )
+                yield PlotextPlot(id=f"plot-{wid}")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -424,12 +412,12 @@ class TrendsScreen(Screen):
 
     @staticmethod
     def _fmt(value: float, unit: str) -> str:
-        # Whole numbers for %, °C, W — one decimal would be noise on a
-        # 1 Hz sample stream and hurts column alignment.
+        # Whole numbers for %, °C, W — one decimal would be noise on
+        # a 1 Hz sample stream and hurts column alignment.
         return f"{value:>5.0f} {unit}"
 
     def _refresh(self) -> None:
-        for key, wid, label, _colour, unit in self._series():
+        for key, wid, label, colour, unit in self._series():
             data = HISTORY.get(key)
             cap = HISTORY.capacity
             # ---- Label ----
@@ -452,10 +440,24 @@ class TrendsScreen(Screen):
                 lab.update(
                     f"[bold #e6e8eb]{label:<10}[/]  [#6b7480]no data yet[/]"
                 )
-            # ---- Sparkline ----
+            # ---- Plot ----
             try:
-                sp = self.query_one(f"#spark-{wid}", Sparkline)
-                sp.data = data if data else [0.0]
+                plot = self.query_one(f"#plot-{wid}", PlotextPlot)
+                plot.plt.clear_figure()
+                if data:
+                    xs = list(range(len(data)))
+                    plot.plt.plot(
+                        xs, data,
+                        marker="braille",
+                        color=colour,
+                    )
+                    plot.plt.theme("dark")
+                    # Keep the axes around — they make absolute values
+                    # interpretable — but drop labels to save vertical
+                    # space (the label widget above already names it).
+                    plot.plt.xlabel("")
+                    plot.plt.ylabel("")
+                plot.refresh()
             except Exception:
                 continue
 
