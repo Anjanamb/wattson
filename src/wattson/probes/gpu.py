@@ -226,3 +226,78 @@ def device_count() -> int:
         return int(nvmlDeviceGetCount())
     except Exception:
         return 0
+
+
+def power_limit_info(idx: int = 0) -> dict | None:
+    """Return current / min / max power-limit info (watts) for GPU `idx`.
+
+    Returns None when NVML isn't available, the GPU doesn't exist, or
+    the driver doesn't expose power-limit constraints.
+    """
+    if not _init():
+        return None
+    try:
+        from pynvml import (
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetName,
+            nvmlDeviceGetPowerManagementLimit,
+            nvmlDeviceGetPowerManagementLimitConstraints,
+            nvmlDeviceGetPowerUsage,
+        )
+
+        h = nvmlDeviceGetHandleByIndex(idx)
+        name = nvmlDeviceGetName(h)
+        if isinstance(name, bytes):
+            name = name.decode()
+        try:
+            cur_w = nvmlDeviceGetPowerUsage(h) / 1000.0
+        except Exception:
+            cur_w = 0.0
+        cap_w = nvmlDeviceGetPowerManagementLimit(h) / 1000.0
+        try:
+            min_mw, max_mw = (
+                nvmlDeviceGetPowerManagementLimitConstraints(h)
+            )
+            min_w = max(1, int(min_mw / 1000))
+            max_w = int(max_mw / 1000)
+        except Exception:
+            # Constraint query not supported — fall back to a sane range
+            min_w = 1
+            max_w = int(max(cap_w * 2, cap_w + 50))
+        return {
+            "name": name,
+            "current_w": cur_w,
+            "cap_w": cap_w,
+            "min_w": min_w,
+            "max_w": max_w,
+        }
+    except Exception:
+        return None
+
+
+def set_power_limit(idx: int, watts: int) -> dict:
+    """Apply a power-management limit (watts) to GPU `idx`.
+
+    Returns {'ok': bool, 'message': str}. Requires admin / root on
+    most systems — NVML returns NVML_ERROR_NO_PERMISSION otherwise,
+    and we surface that as an error string.
+    """
+    if not _init():
+        return {"ok": False, "message": "No NVIDIA driver / GPU"}
+    try:
+        from pynvml import (
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceSetPowerManagementLimit,
+        )
+
+        h = nvmlDeviceGetHandleByIndex(idx)
+        nvmlDeviceSetPowerManagementLimit(h, int(watts * 1000))
+        return {
+            "ok": True,
+            "message": f"GPU{idx} power limit set to {watts} W",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Failed (admin needed?): {e}",
+        }

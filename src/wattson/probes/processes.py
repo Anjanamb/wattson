@@ -193,3 +193,44 @@ def terminate(pid: int) -> TerminateResult:
         return {"ok": False, "message": msg}
     except Exception as e:
         return {"ok": False, "message": f"Failed to terminate {pid}: {e}"}
+
+
+def set_priority(pid: int, level: str) -> TerminateResult:
+    """Cross-platform process priority adjustment.
+
+    `level` ∈ {'low', 'normal', 'high'}. On Windows this maps to
+    psutil's PRIORITY_CLASS constants; on Unix to nice values
+    (low=+10, normal=0, high=-5). High requires admin/root on most
+    systems — psutil raises AccessDenied and we surface it.
+    """
+    import sys
+
+    if level not in ("low", "normal", "high"):
+        return {
+            "ok": False,
+            "message": f"Unknown priority level '{level}'",
+        }
+    try:
+        p = psutil.Process(pid)
+        if sys.platform == "win32":
+            mapping = {
+                "low": psutil.BELOW_NORMAL_PRIORITY_CLASS,
+                "normal": psutil.NORMAL_PRIORITY_CLASS,
+                "high": psutil.ABOVE_NORMAL_PRIORITY_CLASS,
+            }
+        else:
+            mapping = {"low": 10, "normal": 0, "high": -5}
+        p.nice(mapping[level])
+        return {
+            "ok": True,
+            "message": f"Set PID {pid} priority to {level}",
+        }
+    except psutil.NoSuchProcess:
+        return {"ok": False, "message": f"PID {pid} no longer exists"}
+    except psutil.AccessDenied:
+        return {
+            "ok": False,
+            "message": f"Access denied for PID {pid} (admin needed?)",
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Failed: {e}"}

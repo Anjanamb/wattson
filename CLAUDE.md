@@ -6,7 +6,15 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.6` — same as v0.0.5 plus a watchdog that logs throttle / OOM / hot-temp / VRAM-pressure events to `~/.wattson/events.jsonl` (JSONL, rate-limited 1 / category / 60 s). Session count surfaces in the header sub-title; the `w` keybinding opens a tailing screen. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.7` — same as v0.0.6 plus interactive controls: a 3-button priority modal (`n`) for the selected process and a GPU power-limit modal (`p`) for GPU0. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+
+### v0.0.7 additions
+
+- **probes/processes.py — `set_priority(pid, level)`** where `level ∈ {'low','normal','high'}`. Maps to `psutil.{BELOW,_NORMAL,ABOVE_NORMAL}_PRIORITY_CLASS` on Windows and to nice values +10/0/-5 on Unix. Returns the same `{ok, message}` shape as `terminate`. `high` typically requires admin; psutil's `AccessDenied` is caught and surfaced as a clear toast string.
+- **probes/gpu.py — `power_limit_info(idx)` and `set_power_limit(idx, watts)`** wrapping `nvmlDeviceGetPowerManagementLimit{,Constraints}`, `nvmlDeviceGetPowerUsage`, and `nvmlDeviceSetPowerManagementLimit`. `power_limit_info` returns `{name, current_w, cap_w, min_w, max_w}` or `None` when NVML / the constraints API isn't available. The setter returns `{ok, message}` — never raises.
+- **app.py — `SetPriority` ModalScreen** with 3 buttons + `l`/`n`/`h` keyboard shortcuts; dismisses with the level string or `None`. **`SetPowerLimit` ModalScreen** with current/cap/range header, an `Input` field, and Cancel/Apply buttons; client-side validation (integer, in range) before `dismiss(value)`.
+- **WattsonApp — `n` and `p` bindings** plus `action_priority` / `action_power_limit` and the matching callback factories that surface `set_priority` / `set_power_limit` results via `notify(...)`.
+- **Multi-GPU note** — `p` currently always targets GPU0. The per-GPU drill-in screen will be the natural home for a GPU picker; until then, multi-GPU rigs can still set power limits via the `wattson` Python API (`from wattson.probes import gpu; gpu.set_power_limit(idx, watts)`).
 
 ### v0.0.6 additions
 
@@ -91,8 +99,8 @@ This stays a string for v0 to keep the surface small. When probes need to carry 
 2. ✅ `nvidia-smi` output equivalents — process list (v0.0.2), clocks + power + throttle reasons (v0.0.3)
 3. 🟡 Temperatures — GPU done (v0.0.1), CPU Linux/Mac done (v0.0.3); Windows CPU temp still needs WMI/OHM backend
 4. ✅ Throttling alerts — `nvmlDeviceGetCurrentClocksThrottleReasons` (v0.0.3)
-5. 🟡 Process actions — **kill done (v0.0.3)**; priority + CPU-affinity controls still TBD
-6. ⏳ Boost / power-limit (`nvmlDeviceSetPowerManagementLimit`, needs admin)
+5. 🟡 Process actions — kill (v0.0.3), priority (v0.0.7); CPU-affinity still TBD
+6. ✅ Power-limit control via `nvmlDeviceSetPowerManagementLimit` — needs admin to apply (v0.0.7)
 7. 🟡 Richer interactive UI — hardware screen (v0.0.4) + sparkline trends screen (v0.0.5) + watchdog screen (v0.0.6); per-GPU drill-in still TBD
 8. ✅ Background-process ranking with criticality flagging (v0.0.4)
 9. ✅ Full hardware inventory — driver, CUDA, UUID, serial, PCIe gen+width, CPU cache + flags (v0.0.4)

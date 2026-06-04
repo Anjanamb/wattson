@@ -16,6 +16,7 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
+    Input,
     Label,
     Sparkline,
     Static,
@@ -160,6 +161,143 @@ class ConfirmKill(ModalScreen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm")
+
+
+class SetPriority(ModalScreen[str | None]):
+    """Pick one of low / normal / high. Dismisses with the chosen level
+    or `None` for cancel."""
+
+    DEFAULT_CSS = """
+    SetPriority {
+        align: center middle;
+    }
+    SetPriority > Grid {
+        grid-size: 4;
+        grid-columns: 1fr 1fr 1fr 1fr;
+        grid-rows: 3 3;
+        grid-gutter: 1 1;
+        padding: 1 2;
+        width: 70;
+        height: 11;
+        border: thick #38bdf8;
+        background: #14171c;
+    }
+    SetPriority Label#question {
+        column-span: 4;
+        content-align: center middle;
+        height: 3;
+        color: #e6e8eb;
+    }
+    SetPriority Button { width: 100%; }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss(None)", "Cancel"),
+        ("l", "dismiss('low')", "Low"),
+        ("n", "dismiss('normal')", "Normal"),
+        ("h", "dismiss('high')", "High"),
+    ]
+
+    def __init__(self, pid: int, name: str) -> None:
+        super().__init__()
+        self.pid = pid
+        self.name = name
+
+    def compose(self) -> ComposeResult:
+        with Grid():
+            yield Label(
+                f"Set priority — PID {self.pid}  ({self.name})",
+                id="question",
+            )
+            yield Button("Cancel", variant="default", id="cancel")
+            yield Button("Low",    variant="primary", id="low")
+            yield Button("Normal", variant="primary", id="normal")
+            yield Button("High",   variant="warning", id="high")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        else:
+            self.dismiss(event.button.id)
+
+
+class SetPowerLimit(ModalScreen[int | None]):
+    """Read a target wattage (clamped to driver-reported min/max).
+
+    Dismisses with the new wattage or `None` for cancel.
+    """
+
+    DEFAULT_CSS = """
+    SetPowerLimit {
+        align: center middle;
+    }
+    SetPowerLimit > Grid {
+        grid-size: 2;
+        grid-rows: 3 1 3 3;
+        grid-gutter: 1 2;
+        padding: 1 2;
+        width: 64;
+        height: 15;
+        border: thick #38bdf8;
+        background: #14171c;
+    }
+    SetPowerLimit Label.lbl {
+        column-span: 2;
+        content-align: center middle;
+        color: #e6e8eb;
+    }
+    SetPowerLimit Input {
+        column-span: 2;
+    }
+    SetPowerLimit Button { width: 100%; }
+    """
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, gpu_idx: int, info: dict) -> None:
+        super().__init__()
+        self.gpu_idx = gpu_idx
+        self.gpu_name = info["name"]
+        self.current_w = info["current_w"]
+        self.cap_w = info["cap_w"]
+        self.min_w = info["min_w"]
+        self.max_w = info["max_w"]
+
+    def compose(self) -> ComposeResult:
+        with Grid():
+            yield Label(
+                f"Power limit — GPU{self.gpu_idx}  ({self.gpu_name})",
+                classes="lbl",
+            )
+            yield Label(
+                f"Now: {self.current_w:.0f} W  ·  Cap: {self.cap_w:.0f} W "
+                f" ·  Range: {self.min_w} – {self.max_w} W",
+                classes="lbl",
+            )
+            yield Input(
+                placeholder=f"new limit in W ({self.min_w}-{self.max_w})",
+                id="wattage",
+            )
+            yield Button("Cancel", id="cancel")
+            yield Button("Apply",  variant="warning", id="apply")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        # Apply path
+        try:
+            value = int(self.query_one("#wattage", Input).value.strip())
+        except (ValueError, AttributeError):
+            self.app.notify("Enter a whole number.", severity="error", timeout=2)
+            return
+        if not (self.min_w <= value <= self.max_w):
+            self.app.notify(
+                f"Must be {self.min_w}-{self.max_w} W.",
+                severity="error", timeout=2,
+            )
+            return
+        self.dismiss(value)
 
 
 class HardwareScreen(Screen):
@@ -369,6 +507,8 @@ class WattsonApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("k", "kill", "Kill"),
+        Binding("n", "priority", "Nice/Prio"),
+        Binding("p", "power_limit", "Power"),
         Binding("i", "hardware", "Hardware"),
         Binding("t", "trends", "Trends"),
         Binding("w", "watchdog", "Watchdog"),
@@ -424,6 +564,51 @@ class WattsonApp(App):
             severity = "warning" if result["ok"] else "error"
             self.notify(result["message"], severity=severity, timeout=3)
             self._refresh_all()
+        return cb
+
+    def action_priority(self) -> None:
+        table = self.query_one("#processes-table", ProcessTable)
+        row = table.selected()
+        if row is None:
+            self.notify("No process selected.", severity="warning", timeout=2)
+            return
+        self.push_screen(
+            SetPriority(row["pid"], row["name"]),
+            self._make_priority_callback(row["pid"]),
+        )
+
+    def _make_priority_callback(self, pid: int):
+        def cb(level: str | None) -> None:
+            if not level:
+                return
+            result = processes.set_priority(pid, level)
+            severity = "warning" if result["ok"] else "error"
+            self.notify(result["message"], severity=severity, timeout=3)
+            self._refresh_all()
+        return cb
+
+    def action_power_limit(self) -> None:
+        # GPU0 by default. Multi-GPU selection comes with the per-GPU
+        # drill-in screen.
+        info = gpu.power_limit_info(0)
+        if info is None:
+            self.notify(
+                "No NVIDIA GPU0 found (or driver doesn't expose limits).",
+                severity="warning", timeout=3,
+            )
+            return
+        self.push_screen(
+            SetPowerLimit(0, info),
+            self._make_power_callback(0),
+        )
+
+    def _make_power_callback(self, gpu_idx: int):
+        def cb(watts: int | None) -> None:
+            if watts is None:
+                return
+            result = gpu.set_power_limit(gpu_idx, watts)
+            severity = "warning" if result["ok"] else "error"
+            self.notify(result["message"], severity=severity, timeout=4)
         return cb
 
     def _notify_once(self, key: str, message: str, severity: str) -> None:
