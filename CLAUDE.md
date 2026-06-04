@@ -6,7 +6,17 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.7` — same as v0.0.6 plus interactive controls: a 3-button priority modal (`n`) for the selected process and a GPU power-limit modal (`p`) for GPU0. Repo is **public** (`Anjanamb/wattson`) as of 2026-05-27 — user pinned it on their profile alongside the rest of the showcase work.
+`v0.0.8` — bug-fix + Trends-rework release. `k` (kill) and `n` (priority) used to crash with `AttributeError: property 'name' of '...' object has no setter` because both modals stored the process name in `self.name`, which is a read-only property on Textual's Widget base class. Renamed to `self.proc_name`. Trends screen now surfaces current / min / max values per metric and uses per-category colours (CPU cyan · GPU green · mem blue · temps yellow→red · power violet) so each row is interpretable at a glance instead of being a sea of identical blue bars.
+
+### v0.0.8 additions / fixes
+
+- **Fix:** `ConfirmKill.__init__` and `SetPriority.__init__` were assigning `self.name = name`. `Widget.name` is a CSS-queryable read-only property in modern Textual; the assignment raised on every press. Renamed to `self.proc_name` and updated both `compose()` f-strings.
+- **Reserved-name comment** added to both modals — `name`, `id`, `classes`, `styles` are framework properties on Widget; future modals must namespace their own attributes.
+- **TrendsScreen rework:**
+  - Each row is now a `Static` label + `Sparkline`. The label is updated every tick from history with `now <value> · min <…> · max <…> · <N>/60 s` so the relative-scaled sparkline becomes interpretable in absolute terms.
+  - Five colour classes wired through CSS: `cpu-color`, `gpu-color`, `mem-color`, `temp-color`, `power-color`. Each sets distinct `.sparkline--max-color` and `.sparkline--min-color` values so the same metric type uses a consistent colour across rows.
+  - Sparkline height bumped 3 → 4 rows for more vertical resolution.
+- **CSS gotcha noted in code:** Textual's `Sparkline` looks up `.sparkline--max-color` / `.sparkline--min-color` as *descendant pseudo-elements*. The selector pattern is `Sparkline.your-class > .sparkline--max-color { color: ...; }`.
 
 ### v0.0.7 additions
 

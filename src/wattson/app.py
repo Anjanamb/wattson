@@ -146,14 +146,18 @@ class ConfirmKill(ModalScreen[bool]):
     ]
 
     def __init__(self, pid: int, name: str) -> None:
+        # NB: don't store on `self.name` — Textual's Widget exposes a
+        # read-only `name` property for CSS queries; assigning to it
+        # raises `AttributeError: ... no setter`. Same goes for `id`,
+        # `classes`, `styles`, etc. Use namespaced attrs instead.
         super().__init__()
         self.pid = pid
-        self.name = name
+        self.proc_name = name
 
     def compose(self) -> ComposeResult:
         with Grid():
             yield Label(
-                f"Kill PID {self.pid}  ({self.name})?",
+                f"Kill PID {self.pid}  ({self.proc_name})?",
                 id="question",
             )
             yield Button("Cancel", variant="primary", id="cancel")
@@ -199,14 +203,15 @@ class SetPriority(ModalScreen[str | None]):
     ]
 
     def __init__(self, pid: int, name: str) -> None:
+        # See ConfirmKill: `name` is reserved on Widget — use proc_name.
         super().__init__()
         self.pid = pid
-        self.name = name
+        self.proc_name = name
 
     def compose(self) -> ComposeResult:
         with Grid():
             yield Label(
-                f"Set priority — PID {self.pid}  ({self.name})",
+                f"Set priority — PID {self.pid}  ({self.proc_name})",
                 id="question",
             )
             yield Button("Cancel", variant="default", id="cancel")
@@ -339,25 +344,40 @@ class HardwareScreen(Screen):
 class TrendsScreen(Screen):
     """Live sparklines for the metrics in HISTORY.
 
-    Reads metric series from the singleton History buffer on a 1-second
-    timer, while the parent app keeps populating it via _refresh_all().
-    GPU rows are emitted dynamically based on `gpu.device_count()`.
+    Each row is one Static label + one Sparkline. The label is updated
+    every tick with the current value, min, and max from the buffer so
+    the otherwise relative-scaled sparkline becomes interpretable at a
+    glance. Per-metric CSS classes drive the colour scheme — CPU is
+    cyan, GPU green, memory blue, temperatures yellow→red, power
+    violet — so multiple GPU rows aren't a sea of identical bars.
     """
 
     DEFAULT_CSS = """
     TrendsScreen { background: #0b0d10; }
-    TrendsScreen ScrollableContainer {
-        padding: 1 2;
-    }
-    TrendsScreen Label.trend-label {
-        color: #9aa3ad;
+    TrendsScreen ScrollableContainer { padding: 1 2; }
+
+    TrendsScreen Static.trend-label {
         margin: 1 1 0 1;
         height: 1;
+        color: #e6e8eb;
     }
     TrendsScreen Sparkline {
         margin: 0 1 0 1;
-        height: 3;
+        height: 4;
     }
+
+    /* Per-metric colour themes — Textual's Sparkline reads
+       .sparkline--max-color / --min-color from descendant CSS. */
+    TrendsScreen Sparkline.cpu-color   > .sparkline--max-color { color: #00e5ff; }
+    TrendsScreen Sparkline.cpu-color   > .sparkline--min-color { color: #006171; }
+    TrendsScreen Sparkline.gpu-color   > .sparkline--max-color { color: #86efac; }
+    TrendsScreen Sparkline.gpu-color   > .sparkline--min-color { color: #166534; }
+    TrendsScreen Sparkline.mem-color   > .sparkline--max-color { color: #7dd3fc; }
+    TrendsScreen Sparkline.mem-color   > .sparkline--min-color { color: #075985; }
+    TrendsScreen Sparkline.temp-color  > .sparkline--max-color { color: #f87171; }
+    TrendsScreen Sparkline.temp-color  > .sparkline--min-color { color: #92400e; }
+    TrendsScreen Sparkline.power-color > .sparkline--max-color { color: #c084fc; }
+    TrendsScreen Sparkline.power-color > .sparkline--min-color { color: #4338ca; }
     """
 
     BINDINGS = [
@@ -366,32 +386,34 @@ class TrendsScreen(Screen):
         Binding("q",      "app.pop_screen", "Back"),
     ]
 
-    # (history-key, widget-id, human label)
-    _SERIES_CORE = [
-        ("cpu.pct",  "spark-cpu-pct",  "CPU usage  (%)"),
-        ("cpu.temp", "spark-cpu-temp", "CPU temp   (°C)"),
-        ("mem.pct",  "spark-mem-pct",  "Memory     (%)"),
+    # (history-key, widget-base-id, human label, colour-class, unit)
+    _SERIES_CORE: list[tuple[str, str, str, str, str]] = [
+        ("cpu.pct",  "cpu-pct",  "CPU usage", "cpu-color",  "%"),
+        ("cpu.temp", "cpu-temp", "CPU temp",  "temp-color", "°C"),
+        ("mem.pct",  "mem-pct",  "Memory",    "mem-color",  "%"),
     ]
 
-    def _series(self) -> list[tuple[str, str, str]]:
+    def _series(self) -> list[tuple[str, str, str, str, str]]:
         series = list(self._SERIES_CORE)
         for i in range(gpu.device_count()):
             series += [
-                (f"gpu{i}.util",  f"spark-gpu{i}-util",
-                 f"GPU{i} util   (%)"),
-                (f"gpu{i}.temp",  f"spark-gpu{i}-temp",
-                 f"GPU{i} temp   (°C)"),
-                (f"gpu{i}.power", f"spark-gpu{i}-power",
-                 f"GPU{i} power  (W)"),
+                (f"gpu{i}.util",  f"gpu{i}-util",
+                 f"GPU{i} util",  "gpu-color",   "%"),
+                (f"gpu{i}.temp",  f"gpu{i}-temp",
+                 f"GPU{i} temp",  "temp-color",  "°C"),
+                (f"gpu{i}.power", f"gpu{i}-power",
+                 f"GPU{i} power", "power-color", "W"),
             ]
         return series
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with ScrollableContainer():
-            for _key, wid, label in self._series():
-                yield Label(label, classes="trend-label")
-                yield Sparkline([0.0], id=wid)
+            for _key, wid, _label, colour, _unit in self._series():
+                yield Static("", id=f"label-{wid}", classes="trend-label")
+                yield Sparkline(
+                    [0.0], id=f"spark-{wid}", classes=f"{colour}",
+                )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -400,16 +422,41 @@ class TrendsScreen(Screen):
         self._refresh()
         self.set_interval(1.0, self._refresh)
 
+    @staticmethod
+    def _fmt(value: float, unit: str) -> str:
+        # Whole numbers for %, °C, W — one decimal would be noise on a
+        # 1 Hz sample stream and hurts column alignment.
+        return f"{value:>5.0f} {unit}"
+
     def _refresh(self) -> None:
-        for key, wid, _label in self._series():
+        for key, wid, label, _colour, unit in self._series():
             data = HISTORY.get(key)
+            cap = HISTORY.capacity
+            # ---- Label ----
             try:
-                sparkline = self.query_one(f"#{wid}", Sparkline)
-                # Sparkline rendering doesn't like an empty list — feed it
-                # a single zero so the widget paints a flat baseline.
-                sparkline.data = data if data else [0.0]
+                lab = self.query_one(f"#label-{wid}", Static)
             except Exception:
-                # The widget might not be mounted yet; tick again next time.
+                continue
+            if data:
+                current = data[-1]
+                mn = min(data)
+                mx = max(data)
+                lab.update(
+                    f"[bold #e6e8eb]{label:<10}[/]"
+                    f"  now [bold #00e5ff]{self._fmt(current, unit)}[/]"
+                    f"  [#6b7480]· min {self._fmt(mn, unit)}"
+                    f"  · max {self._fmt(mx, unit)}"
+                    f"  · {len(data)}/{cap} s[/]"
+                )
+            else:
+                lab.update(
+                    f"[bold #e6e8eb]{label:<10}[/]  [#6b7480]no data yet[/]"
+                )
+            # ---- Sparkline ----
+            try:
+                sp = self.query_one(f"#spark-{wid}", Sparkline)
+                sp.data = data if data else [0.0]
+            except Exception:
                 continue
 
 
