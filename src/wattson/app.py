@@ -274,17 +274,20 @@ class TrendsScreen(Screen):
 
 
 class WatchdogScreen(Screen):
-    """Tails the watchdog JSONL log; refreshes every 2 s."""
+    """Tails the watchdog JSONL log; refreshes every 2 s.
+
+    Uses one Static composed inside the ScrollableContainer (same pattern
+    as HardwareScreen). Earlier versions yielded an empty container and
+    `mount()`-ed Static widgets dynamically — Textual's render pipeline
+    didn't handle that cleanly (visual = None → AttributeError on
+    `render_strips`). `update()` on a single child is what works.
+    """
 
     DEFAULT_CSS = """
     WatchdogScreen { background: #0b0d10; }
     WatchdogScreen ScrollableContainer { padding: 1 2; }
-    WatchdogScreen Static#wd-empty {
-        color: #6b7480;
-        padding: 1 2;
-    }
-    WatchdogScreen Static.wd-event {
-        margin: 0 1;
+    WatchdogScreen Static#wd-content {
+        color: #e6e8eb;
         padding: 0 1;
     }
     """
@@ -297,7 +300,8 @@ class WatchdogScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield ScrollableContainer(id="wd-scroll")
+        with ScrollableContainer():
+            yield Static("Loading watchdog log…", id="wd-content")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -307,29 +311,31 @@ class WatchdogScreen(Screen):
         self.set_interval(2.0, self._render)
 
     def _render(self) -> None:
+        try:
+            content = self.query_one("#wd-content", Static)
+        except Exception:
+            return
         events = WATCHDOG.recent_events(limit=200)
-        scroll = self.query_one("#wd-scroll", ScrollableContainer)
-        scroll.remove_children()
         if not events:
-            scroll.mount(Static(
-                "No events logged yet.\n"
+            content.update(
+                "[#6b7480]No events logged yet.\n\n"
                 "Thresholds: GPU > 85°C, CPU > 90°C, mem > 90 %, "
-                "VRAM > 90 %, any active throttle reason.\n"
-                f"Log file: {WATCHDOG.log_path}",
-                id="wd-empty",
-            ))
+                "VRAM > 90 %, any active throttle reason.\n\n"
+                f"Log file: {WATCHDOG.log_path}[/]"
+            )
             return
         # Most recent first so you don't have to scroll
+        lines: list[str] = []
         for ev in reversed(events):
             sev = ev.get("severity", "?")
             ts = ev.get("ts", "")
             msg = ev.get("message", "")
             colour = {"crit": "red", "warn": "yellow"}.get(sev, "white")
-            scroll.mount(Static(
-                f"[{colour}]{sev.upper():<4}[/] "
-                f"[#9aa3ad]{ts}[/]  {msg}",
-                classes="wd-event",
-            ))
+            lines.append(
+                f"[{colour}]{sev.upper():<4}[/{colour}]  "
+                f"{ts}  {msg}"
+            )
+        content.update("\n".join(lines))
 
 
 class WattsonApp(App):
