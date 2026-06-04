@@ -289,7 +289,9 @@ class SetPowerLimit(ModalScreen[int | None]):
         try:
             value = int(self.query_one("#wattage", Input).value.strip())
         except (ValueError, AttributeError):
-            self.app.notify("Enter a whole number.", severity="error", timeout=2)
+            self.app.notify(
+                "Enter a whole number.", severity="error", timeout=2,
+            )
             return
         if not (self.min_w <= value <= self.max_w):
             self.app.notify(
@@ -445,10 +447,14 @@ class WatchdogScreen(Screen):
     def on_mount(self) -> None:
         self.title = "wattson"
         self.sub_title = f"watchdog · {WATCHDOG.log_path}"
-        self._render()
-        self.set_interval(2.0, self._render)
+        self._refresh_log()
+        self.set_interval(2.0, self._refresh_log)
 
-    def _render(self) -> None:
+    def _refresh_log(self) -> None:
+        # NB: do not name this `_render` — that's a Textual Widget
+        # internal that returns the widget's visual. Shadowing it with
+        # a method that returns None blanks the screen and crashes the
+        # render pipeline with AttributeError on `render_strips`.
         try:
             content = self.query_one("#wd-content", Static)
         except Exception:
