@@ -6,7 +6,13 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.13` — third perf pass. v0.0.12 moved only the process snapshot off the main thread; user still reported lag and the new disk diagnostic surfaced `SystemError` (a CPython-internal exception class) from psutil's C extension on their box. Re-raising and catching that at 1 Hz on the main thread is what's visible. Fix: every heavy probe now runs in its own `@work(thread=True)` worker, and the disk snapshot string is cached.
+`v0.0.14` — fourth perf pass, with a course-correction. v0.0.13's three-worker design caused a panel rendering regression and didn't actually fix the underlying NVML latency that's the real bottleneck on Windows. Reverted the panel + metric workers; kept the process worker; consolidated all NVML calls behind a single shared cache.
+
+### v0.0.14 additions / fixes
+
+- **Reverted worker complexity.** `_refresh_panels` and `_refresh_metrics` from v0.0.13 are gone. Back to v0.0.12's `_refresh_light` for stat panels + metrics, called synchronously at 1 Hz. `_refresh_processes` keeps its worker (the win from v0.0.12). The v0.0.13 panel-truncation regression — where multi-line bodies set via `call_from_thread` only rendered the first line — is fixed by simply not going through that code path anymore.
+- **Single NVML round per tick.** `gpu.py` now has `_collect()` / `_collect_uncached()`. The collector does *one* pass of NVML calls (name, util, mem, temp, clock, power, throttle reasons for every GPU) and returns a structured dict. `snapshot()`, `metrics()`, and `throttle_masks()` all format slices of that dict. Result is wrapped in a `_TTL_SEC = 0.5` cache, so a 1 Hz refresh that calls all three functions only triggers NVML once every other tick — total NVML traffic drops from ~14 calls/sec to ~7 every 2 seconds.
+- **Cache TTL choice.** 0.5 s on GPU because util / clock / power genuinely change second-to-second; 10 s on disk because usage barely moves and the user's box pays SystemError-handling cost on every miss; 5 s on CPU temp because temperature doesn't move fast and WMI is expensive.
 
 ### v0.0.13 additions / fixes
 

@@ -892,14 +892,17 @@ class WattsonApp(App):
         self.sub_title = "your machine's personal assistant"
         # De-dup toasts: each `_notify_once(key, ...)` fires at most once.
         self._notified: set[str] = set()
-        # Everything heavy runs in worker threads now (panels, metrics,
-        # processes). The main thread only handles interval ticks and
-        # key events — those stay instant even when probes are slow.
-        self._refresh_panels()
-        self._refresh_metrics()
+        # v0.0.14 revision: v0.0.13's three-worker design caused a panel
+        # rendering regression (multi-line bodies showed only first line
+        # after a `call_from_thread` update). Going back to v0.0.12's
+        # working model — stat panels + metrics run synchronously on the
+        # main thread, only the genuinely heavy process snapshot runs in
+        # a worker. The real perf win comes from caching all NVML calls
+        # in gpu.py (0.5 s TTL) so each tick makes ~14× fewer driver
+        # round-trips than before.
+        self._refresh_light()
         self._refresh_processes()
-        self.set_interval(1.0, self._refresh_panels)
-        self.set_interval(1.0, self._refresh_metrics)
+        self.set_interval(1.0, self._refresh_light)
         self.set_interval(2.0, self._refresh_processes)
 
     def action_refresh(self) -> None:
@@ -1032,74 +1035,40 @@ class WattsonApp(App):
         self.notify(message, severity=severity, timeout=8)
 
     def _refresh_all(self) -> None:
-        """Compatibility shim — older callers (kill/priority/affinity/
-        power-limit callbacks) call this to nudge a refresh after a
-        controlling action. Triggers the panel + metric workers; the
-        process snapshot catches up on its own 2 s cadence."""
-        self._refresh_panels()
-        self._refresh_metrics()
+        """Compatibility shim — kill/priority/affinity/power-limit
+        callbacks call this to nudge a refresh after a controlling
+        action. Triggers the light path; processes catch up on their
+        own 2 s cadence."""
+        self._refresh_light()
 
-    @work(exclusive=True, thread=True, group="panels")
-    def _refresh_panels(self) -> None:
-        """Snapshot strings for the four stat panels — on a worker
-        thread because gpu.snapshot() makes 8+ NVML calls per refresh
-        and disk.snapshot() can raise `SystemError` from the psutil C
-        extension (slow). exclusive=True ensures only one in flight."""
-        snapshots: dict[str, str] = {}
-        for panel_id, getter in (
-            ("cpu-panel",  cpu.snapshot),
-            ("gpu-panel",  gpu.snapshot),
-            ("mem-panel",  memory.snapshot),
-            ("disk-panel", disk.snapshot),
-        ):
-            try:
-                snapshots[panel_id] = getter()
-            except Exception as e:
-                snapshots[panel_id] = (
-                    f"[red]probe error:[/red] "
-                    f"{type(e).__name__}: {e}"
-                )
-        self.call_from_thread(self._apply_panels, snapshots)
+    def _refresh_light(self) -> None:
+        """Sync refresh on the main thread for stat panels + metrics.
 
-    def _apply_panels(self, snapshots: dict[str, str]) -> None:
-        """Main-thread sink for `_refresh_panels`. Sets the reactive
-        `body` on each StatPanel, which schedules its re-render."""
-        for panel_id, text in snapshots.items():
-            try:
-                self.query_one(f"#{panel_id}", StatPanel).body = text
-            except Exception:
-                pass
-
-    @work(exclusive=True, thread=True, group="metrics")
-    def _refresh_metrics(self) -> None:
-        """Metric collection for HISTORY + WATCHDOG — also a worker
-        because gpu.metrics() and gpu.throttle_masks() make their own
-        round of NVML calls."""
+        Cheap because:
+          - cpu/memory/disk snapshots are fast (or cached in disk's
+            case);
+          - gpu.snapshot / gpu.metrics / gpu.throttle_masks all share
+            the cached `_collect()` in gpu.py, so a single 0.5 s tick
+            only triggers one NVML round across all three.
+        """
+        for panel in self.query(StatPanel):
+            panel.refresh_body()
         try:
             all_metrics: dict[str, float] = {}
             all_metrics.update(cpu.metrics())
             all_metrics.update(memory.metrics())
             all_metrics.update(gpu.metrics())
-            masks = gpu.throttle_masks()
+            HISTORY.add_many(all_metrics)
+            WATCHDOG.check(all_metrics, gpu.throttle_masks())
+            count = WATCHDOG.session_count
+            base = "your machine's personal assistant"
+            self.sub_title = f"{base} · ⚠ {count}" if count else base
         except Exception as e:
-            self.call_from_thread(
-                self._notify_once,
+            self._notify_once(
                 "metrics-error",
-                f"metrics error: {type(e).__name__}: {e}",
+                f"metrics/watchdog error: {type(e).__name__}: {e}",
                 "error",
             )
-            return
-        self.call_from_thread(self._apply_metrics, all_metrics, masks)
-
-    def _apply_metrics(
-        self, all_metrics: dict[str, float], masks: dict[int, int],
-    ) -> None:
-        """Main-thread sink for `_refresh_metrics`."""
-        HISTORY.add_many(all_metrics)
-        WATCHDOG.check(all_metrics, masks)
-        count = WATCHDOG.session_count
-        base = "your machine's personal assistant"
-        self.sub_title = f"{base} · ⚠ {count}" if count else base
 
     @work(exclusive=True, thread=True, group="processes")
     def _refresh_processes(self) -> None:
