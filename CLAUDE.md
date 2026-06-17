@@ -6,7 +6,18 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.15` — fifth perf pass, this time pragmatic. v0.0.11→14 had me chasing the wrong leads — caching helped, threading partly helped, but the user kept reporting "takes forever to respond" because at 1 Hz Textual's rendering pipeline is still doing real work every tick regardless of how cheap the probes are. v0.0.15 just halves the cadence and lets key events interleave properly.
+`v0.0.16` — **strategy pivot**. v0.0.11→15 (caching → threading → cadence) didn't make wattson feel snappy on Windows Terminal. The conclusion is that Textual itself isn't the right substrate for a "system monitor I tap keys on": the event loop + widget tree + CSS reflow do too much per tick. v0.0.16 keeps the full Textual app under `wattson tui` for power users but makes the **default `wattson` a Rich `Live` dashboard** — no event loop, no widgets, no CSS, just `print` a Layout once per second.
+
+### v0.0.16 additions
+
+- **New module** `src/wattson/live.py` — Rich `Live` dashboard. Five layout cells: 4 stat panels in a row + 1 process table below. Each tick re-renders the whole Layout (`live.update(_render())`); no widget identity, so no state-management complexity. `screen=True` uses the alternate screen buffer so the terminal is restored on Ctrl+C. Probes wrapped in `_safe_snapshot()` so a single failure shows inline as a `[red]probe error:[/red]` instead of crashing the dashboard.
+- **New module** `src/wattson/cli.py` — argparse dispatcher. Subcommands: `live`, `tui`, `status`, `kill`, `nice`, `power`. No subcommand = default `live` with 1 s interval. Actions are CLI commands now (`wattson kill 1234`), which removes the need to keep an interactive event loop alive just to handle keypresses.
+- **Entry point change.** `pyproject.toml`'s `[project.scripts] wattson = "wattson.cli:main"` (was `wattson.__main__:main`). `__main__.py` updated to dispatch through CLI so `python -m wattson` works the same way.
+- **Original Textual app preserved.** `src/wattson/app.py` unchanged; `wattson tui` still launches the full experience (watchdog screen, trends, drill-down, hardware inventory, affinity / priority / power modals, etc.). The pivot isn't a deletion — it's a default-mode swap.
+
+### Why this should finally help
+
+Rich `Live` writes ANSI directly to stdout and doesn't maintain a widget tree, a CSS engine, or an async event loop. The per-tick cost is approximately one `Layout` render + one terminal write. Compared to Textual's per-tick budget (interval callback → reactive watchers → CSS reflow → composite → diff → flush), it's a different order of magnitude. The downside is no keyboard interactivity inside the dashboard — the trade is explicit: Live for snappy passive monitoring, CLI subcommands for actions.
 
 ### v0.0.15 additions / fixes
 

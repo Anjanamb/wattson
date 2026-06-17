@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wattson"
-version = "0.0.15"
+version = "0.0.16"
 description = "Your machine's personal assistant — DL-workload-aware system monitor"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,7 @@ dev = [
 ]
 
 [project.scripts]
-wattson = "wattson.__main__:main"
+wattson = "wattson.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Anjanamb/wattson"
