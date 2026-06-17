@@ -104,16 +104,28 @@ class ProcessProbe:
         return out
 
     def snapshot(self, limit: int = 15) -> list[ProcessRow]:
+        """Two-phase snapshot for Windows-friendly tick latency.
+
+        Phase 1 — light pass: walk every PID, read only `name`,
+        `cpu_percent`, `memory_info` (cheap, batched via oneshot).
+        Rank rows by VRAM-first / CPU / mem composite.
+
+        Phase 2 — heavy pass: fetch `cmdline()` only for the top
+        `limit` rows. On Windows `cmdline()` can be ~10-30 ms per
+        call; doing it for every process (~300) was dominating tick
+        time. Doing it for the top 20 is ~50× cheaper.
+        """
         gpu_procs = self._collect_gpu_processes()
         total_mem_mb = psutil.virtual_memory().total / (1024 * 1024)
 
         current: dict[int, psutil.Process] = {}
-        rows: list[ProcessRow] = []
+        # (proc, pid, name, cpu_pct, mem_mb)
+        light: list[tuple[psutil.Process, int, str, float, float]] = []
         for proc in psutil.process_iter():
             try:
                 pid = proc.pid
-                # Reuse the cached Process when possible so cpu_percent()
-                # has the right baseline.
+                # Reuse the cached Process so cpu_percent() deltas have
+                # the right baseline from snapshot #2 onwards.
                 cached = self._procs.get(pid)
                 if cached is not None:
                     proc = cached
@@ -123,31 +135,7 @@ class ProcessProbe:
                     name = proc.name() or "?"
                     cpu_pct = proc.cpu_percent()
                     mem_mb = proc.memory_info().rss / (1024 * 1024)
-                    cmd = proc.cmdline()
-                cmdline = " ".join(cmd[:6])[:80] if cmd else name
-
-                gpu_info = gpu_procs.get(pid)
-                gpu_idx = gpu_info[0] if gpu_info else None
-                vram_mb = gpu_info[1] if gpu_info else None
-
-                holds_vram = vram_mb is not None and vram_mb > 0.0
-                is_idle = name in _IDLE_NAMES
-                high_cpu = cpu_pct > 50.0 and not is_idle
-                high_mem = total_mem_mb > 0 and (mem_mb / total_mem_mb) > 0.10
-                critical = holds_vram or high_cpu or high_mem
-
-                rows.append(
-                    {
-                        "pid": pid,
-                        "name": name,
-                        "cpu_pct": cpu_pct,
-                        "mem_mb": mem_mb,
-                        "gpu_idx": gpu_idx,
-                        "vram_mb": vram_mb,
-                        "cmdline": cmdline,
-                        "critical": critical,
-                    }
-                )
+                light.append((proc, pid, name, cpu_pct, mem_mb))
             except Exception:
                 # Any psutil quirk — NoSuchProcess, AccessDenied,
                 # ZombieProcess, TimeoutExpired, OSError on /proc, etc.
@@ -157,16 +145,52 @@ class ProcessProbe:
         # Forget cached processes that no longer exist
         self._procs = current
 
-        # GPU processes first (sorted by VRAM desc), then everyone else by CPU%
-        rows.sort(
-            key=lambda r: (
-                r["vram_mb"] is None,    # False (has VRAM) sorts first
-                -(r["vram_mb"] or 0.0),
-                -r["cpu_pct"],
-                -r["mem_mb"],
+        # Rank: VRAM holders first (descending), then CPU%, then mem.
+        def _rank_key(t):
+            _proc, pid, _name, cpu_pct, mem_mb = t
+            vram = (gpu_procs.get(pid) or (None, None))[1]
+            return (
+                vram is None,           # holders sort first
+                -(vram or 0.0),
+                -cpu_pct,
+                -mem_mb,
             )
-        )
-        return rows[:limit]
+
+        light.sort(key=_rank_key)
+        top = light[:limit]
+
+        # Phase 2: cmdline only for the survivors.
+        rows: list[ProcessRow] = []
+        for proc, pid, name, cpu_pct, mem_mb in top:
+            try:
+                cmd = proc.cmdline()
+            except Exception:
+                cmd = None
+            cmdline = " ".join(cmd[:6])[:80] if cmd else name
+
+            gpu_info = gpu_procs.get(pid)
+            gpu_idx = gpu_info[0] if gpu_info else None
+            vram_mb = gpu_info[1] if gpu_info else None
+
+            holds_vram = vram_mb is not None and vram_mb > 0.0
+            is_idle = name in _IDLE_NAMES
+            high_cpu = cpu_pct > 50.0 and not is_idle
+            high_mem = total_mem_mb > 0 and (mem_mb / total_mem_mb) > 0.10
+            critical = holds_vram or high_cpu or high_mem
+
+            rows.append(
+                {
+                    "pid": pid,
+                    "name": name,
+                    "cpu_pct": cpu_pct,
+                    "mem_mb": mem_mb,
+                    "gpu_idx": gpu_idx,
+                    "vram_mb": vram_mb,
+                    "cmdline": cmdline,
+                    "critical": critical,
+                }
+            )
+        return rows
 
 
 _probe: ProcessProbe | None = None

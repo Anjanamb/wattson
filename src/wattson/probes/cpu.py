@@ -36,6 +36,35 @@ def info() -> dict:
     }
 
 
+# --- WMI connection + temperature value caches ---
+# Recreating a WMI connection is *expensive* (~100-500 ms on Windows).
+# CPU temperature also doesn't move fast enough to need a 1 Hz read.
+# So: cache the WMI namespace handles for the process lifetime, and
+# cache the temperature value for `_TEMP_TTL_SEC` between snapshot calls.
+import time as _time
+
+_TEMP_TTL_SEC = 5.0
+_wmi_conn_cache: dict[str, object] = {}
+_temp_cache = {"value": "n/a", "ts": 0.0}
+
+
+def _get_wmi(namespace: str):
+    """Lazy-init cached WMI client. Returns None if WMI is unavailable
+    or the namespace can't be opened."""
+    if namespace in _wmi_conn_cache:
+        return _wmi_conn_cache[namespace]
+    try:
+        import wmi  # type: ignore[import-not-found]
+    except ImportError:
+        _wmi_conn_cache[namespace] = None
+        return None
+    try:
+        _wmi_conn_cache[namespace] = wmi.WMI(namespace=namespace)
+    except Exception:
+        _wmi_conn_cache[namespace] = None
+    return _wmi_conn_cache[namespace]
+
+
 def _temp_psutil() -> str | None:
     """Linux / FreeBSD / macOS via psutil. Returns None when nothing works."""
     if not hasattr(psutil, "sensors_temperatures"):
@@ -61,17 +90,13 @@ def _temp_psutil() -> str | None:
 def _temp_wmi() -> str | None:
     """Windows ACPI thermal zone via WMI's `root\\wmi` namespace.
 
-    Many modern laptops don't expose CPU temperature here — the value
-    lives in EC registers behind vendor drivers. `_temp_lhm()` handles
-    those when LibreHardwareMonitor (or OpenHardwareMonitor) is
-    running with its WMI provider enabled.
+    Uses the cached WMI connection so the per-call cost is just the
+    query itself, not the connection setup.
     """
-    try:
-        import wmi  # type: ignore[import-not-found]
-    except ImportError:
+    w = _get_wmi("root\\wmi")
+    if w is None:
         return None
     try:
-        w = wmi.WMI(namespace="root\\wmi")
         zones = w.MSAcpi_ThermalZoneTemperature()
     except Exception:
         return None
@@ -90,24 +115,13 @@ def _temp_wmi() -> str | None:
 def _temp_lhm() -> str | None:
     """LibreHardwareMonitor / OpenHardwareMonitor WMI provider.
 
-    LHM exposes its sensors in `root\\LibreHardwareMonitor`; older OHM
-    used `root\\OpenHardwareMonitor`. Each Sensor row carries `Name`,
-    `SensorType`, `Value`. We look for a Temperature sensor whose Name
-    mentions CPU and return the first non-empty Value.
-
-    Requires LHM/OHM to be running (often as admin) with the WMI
-    provider enabled. Returns None otherwise — quiet best-effort.
+    Cached WMI connection per namespace. Requires LHM/OHM to be running
+    (often as admin) with the WMI provider enabled.
     """
-    try:
-        import wmi  # type: ignore[import-not-found]
-    except ImportError:
-        return None
-
     candidates: list[float] = []
     for ns in ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"):
-        try:
-            w = wmi.WMI(namespace=ns)
-        except Exception:
+        w = _get_wmi(ns)
+        if w is None:
             continue
         try:
             sensors = w.Sensor()
@@ -134,17 +148,8 @@ def _temp_lhm() -> str | None:
     return f"{max(candidates):.0f}°C"
 
 
-def _temp() -> str:
-    """Best-effort CPU temperature; returns a human string or 'n/a'.
-
-    Order:
-      1. psutil sensors (Linux / FreeBSD / macOS)
-      2. Windows WMI ACPI thermal zone (some Intel boxes)
-      3. LibreHardwareMonitor / OpenHardwareMonitor WMI provider
-         (modern laptops where ACPI hides the EC temperature)
-
-    Falls back to 'n/a' when none of the above work.
-    """
+def _temp_uncached() -> str:
+    """psutil → WMI ACPI → LHM/OHM → 'n/a'. Skips the cache."""
     import sys
 
     t = _temp_psutil()
@@ -158,6 +163,19 @@ def _temp() -> str:
         if t is not None:
             return t
     return "n/a"
+
+
+def _temp() -> str:
+    """Best-effort CPU temperature; cached for `_TEMP_TTL_SEC` so the
+    1 Hz TUI refresh isn't blocked by a WMI query every tick. CPU temp
+    doesn't move fast enough for sub-second resolution to matter."""
+    now = _time.monotonic()
+    if now - _temp_cache["ts"] < _TEMP_TTL_SEC:
+        return _temp_cache["value"]  # type: ignore[return-value]
+    value = _temp_uncached()
+    _temp_cache["value"] = value
+    _temp_cache["ts"] = now
+    return value
 
 
 def snapshot() -> str:

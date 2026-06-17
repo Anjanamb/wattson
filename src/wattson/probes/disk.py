@@ -11,12 +11,25 @@ def _gb(b: int) -> float:
 
 def snapshot() -> str:
     rows = []
-    for p in psutil.disk_partitions(all=False):
+    try:
+        parts = psutil.disk_partitions(all=False)
+    except Exception:
+        return "no readable partitions"
+    for p in parts:
+        # psutil can raise OSError, PermissionError, struct.error,
+        # ValueError and others on locked / offline / removable / weird
+        # Windows volumes. Any failure for one partition should not abort
+        # the whole snapshot.
         try:
             u = psutil.disk_usage(p.mountpoint)
-        except (PermissionError, OSError):
+            mount = p.mountpoint or "?"
+            used_gb = _gb(u.used)
+            total_gb = _gb(u.total)
+            pct = u.percent
+            rows.append(
+                f"{mount:<10}  {used_gb:5.0f} / {total_gb:5.0f} GB"
+                f"  ({pct:4.1f}%)"
+            )
+        except Exception:
             continue
-        rows.append(
-            f"{p.mountpoint:<10}  {_gb(u.used):5.0f} / {_gb(u.total):5.0f} GB  ({u.percent:4.1f}%)"
-        )
     return "\n".join(rows) if rows else "no readable partitions"

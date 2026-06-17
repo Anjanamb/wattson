@@ -6,7 +6,18 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.10` — finishes the planned single-host feature set: per-GPU drill-down (`g`), CPU affinity controls (`a`), and a LibreHardwareMonitor fallback chain for Windows CPU temperature. Multi-host clustering is intentionally out of scope — it's a separate distributed-systems project, not "polish".
+`v0.0.11` — perf + stability release. v0.0.10's Windows experience was sluggish (TUI noticeably slow to start and refresh) and the Disk panel crashed on the user's box with `argument 1 (impossible<bad format char>)`. Three fixes shipped together.
+
+### v0.0.11 additions / fixes
+
+- **Disk panel stability.** `disk.snapshot()` used to catch only `PermissionError` / `OSError`. On Windows some volumes (removable, locked, network shares mid-reconnect) make psutil's C extension raise `struct.error` or `ValueError` instead, which then bubbled all the way up and showed as a probe-error message in the panel. Now the inner loop catches a bare `Exception` per partition, and `disk_partitions(all=False)` itself is wrapped so even that can degrade gracefully.
+- **CPU temp caching.** `_temp()` was re-running both WMI ACPI **and** the LHM/OHM enumerate every single refresh tick (1 Hz). On Windows that's ~300-800 ms of WMI per tick — the user-visible slowdown. New: module-level `_temp_cache` with `_TEMP_TTL_SEC = 5` so the actual probe runs once every 5 s; intermediate ticks just hand back the cached value. CPU temperature doesn't move fast enough for sub-second resolution to matter.
+- **WMI connection caching.** `wmi.WMI(namespace=...)` setup is ~50-200 ms per namespace. v0.0.10 created a fresh connection every call. New `_get_wmi(namespace)` lazily constructs each connection once and stores it in `_wmi_conn_cache` for the lifetime of the process. Both `_temp_wmi` and `_temp_lhm` route through it.
+- **Two-phase process snapshot.** v0.0.10's `processes.snapshot()` called `proc.cmdline()` for every process (~200-300 on a typical Windows box). On Windows that syscall can be ~10-30 ms per call. The new structure:
+  1. Phase 1: light pass — only `name`, `cpu_percent`, `memory_info` (cheap, batched in `oneshot()`) for every PID.
+  2. Sort by the same composite key (`vram → cpu_pct → mem_mb`).
+  3. Phase 2: `cmdline()` for the top `limit` rows only.
+  Net effect: `cmdline()` runs on ~20 processes instead of ~300, dropping per-tick cost by roughly 50×.
 
 ### v0.0.10 additions
 

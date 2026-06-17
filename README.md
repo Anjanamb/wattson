@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.10-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.11-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.10` — finishes the planned single-host feature set: **per-GPU drill-down** (`g`), **CPU affinity** controls (`a`), and a **LibreHardwareMonitor** fallback for Windows CPU temperature on laptops where ACPI hides it. Multi-host clustering remains intentionally out of scope.
+**Status:** `v0.0.11` — perf + stability release. Disk panel no longer dies on odd Windows volumes; CPU temp lookups are cached for 5 s (and WMI connections cached for the lifetime of the process) so the TUI doesn't stall on every refresh; process snapshots use a two-phase walk so `cmdline()` only runs on the top N rows rather than all ~300 PIDs.
 
 ## Planned features
 
