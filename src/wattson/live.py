@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -38,7 +38,13 @@ def _stat_panel(title: str, body: str, colour: str = "cyan") -> Panel:
 
 def _process_table(rows: list[dict]) -> Panel:
     """Top-N process table — same data as the TUI's DataTable, but a
-    plain Rich Table."""
+    plain Rich Table.
+
+    Explicit `width=` on the numeric/short columns + `ratio=` on
+    COMMAND so Rich stops collapsing PID/CPU%/MEM/GPU/VRAM into `...`
+    when the panel isn't very wide. Without these, `expand=True`
+    proportionally shrank every column equally.
+    """
     table = Table(
         show_header=True,
         header_style="bold #9aa3ad",
@@ -46,13 +52,13 @@ def _process_table(rows: list[dict]) -> Panel:
         pad_edge=False,
         expand=True,
     )
-    table.add_column("PID",     justify="right",  no_wrap=True)
-    table.add_column("NAME",                    no_wrap=True)
-    table.add_column("CPU%",    justify="right",  no_wrap=True)
-    table.add_column("MEM MB",  justify="right",  no_wrap=True)
-    table.add_column("GPU",     justify="center", no_wrap=True)
-    table.add_column("VRAM MB", justify="right",  no_wrap=True)
-    table.add_column("COMMAND",                 overflow="ellipsis", no_wrap=True)
+    table.add_column("PID",     width=7,  justify="right",  no_wrap=True)
+    table.add_column("NAME",    width=28, no_wrap=True, overflow="ellipsis")
+    table.add_column("CPU%",    width=6,  justify="right",  no_wrap=True)
+    table.add_column("MEM MB",  width=8,  justify="right",  no_wrap=True)
+    table.add_column("GPU",     width=4,  justify="center", no_wrap=True)
+    table.add_column("VRAM MB", width=8,  justify="right",  no_wrap=True)
+    table.add_column("COMMAND", ratio=1,  no_wrap=True, overflow="ellipsis")
 
     for r in rows:
         gi, vm = r.get("gpu_idx"), r.get("vram_mb")
@@ -102,11 +108,12 @@ def _safe_processes() -> list[dict]:
 def _render() -> Layout:
     """Build the full Layout for the current tick."""
     stats = Layout(name="stats", size=10)
+    cpu_p = _stat_panel("CPU",    _safe_snapshot(cpu.snapshot),    "cyan")
+    gpu_p = _stat_panel("GPU",    _safe_snapshot(gpu.snapshot),    "green")
+    mem_p = _stat_panel("Memory", _safe_snapshot(memory.snapshot), "blue")
+    dsk_p = _stat_panel("Disk",   _safe_snapshot(disk.snapshot),   "magenta")
     stats.split_row(
-        Layout(_stat_panel("CPU",    _safe_snapshot(cpu.snapshot),    "cyan")),
-        Layout(_stat_panel("GPU",    _safe_snapshot(gpu.snapshot),    "green")),
-        Layout(_stat_panel("Memory", _safe_snapshot(memory.snapshot), "blue")),
-        Layout(_stat_panel("Disk",   _safe_snapshot(disk.snapshot),   "magenta")),
+        Layout(cpu_p), Layout(gpu_p), Layout(mem_p), Layout(dsk_p),
     )
 
     proc_panel = _process_table(_safe_processes())

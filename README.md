@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.16-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.17-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.16` — strategy pivot. Six rounds of caching/threading inside Textual still felt unresponsive on Windows Terminal, so the **default mode is now a Rich `Live` dashboard** (no event loop, no widget tree, no CSS — just print a Layout once per second). Ctrl+C quits. Actions (kill, priority, power-limit) moved to CLI subcommands. The full Textual app with all six screens is still there as `wattson tui` for power users.
+**Status:** `v0.0.17` — Live-dashboard polish. Fixed two specific issues with the v0.0.16 Rich Live mode: process table columns were collapsing to `...` because `expand=True` shrank everything equally (now explicit `width=` on the numeric columns + `ratio=1` on COMMAND); and the Windows Disk panel kept raising `SystemError` from psutil's C extension (now bypassed via direct `GetDiskFreeSpaceExW` ctypes call). CPU temperature on the i7-13700H still shows `n/a` — that's a real hardware limitation (Intel's modern laptops hide the package temperature behind vendor EC registers), fixable by installing LibreHardwareMonitor.
 
 ## Planned features
 

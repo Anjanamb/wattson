@@ -6,7 +6,13 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.16` — **strategy pivot**. v0.0.11→15 (caching → threading → cadence) didn't make wattson feel snappy on Windows Terminal. The conclusion is that Textual itself isn't the right substrate for a "system monitor I tap keys on": the event loop + widget tree + CSS reflow do too much per tick. v0.0.16 keeps the full Textual app under `wattson tui` for power users but makes the **default `wattson` a Rich `Live` dashboard** — no event loop, no widgets, no CSS, just `print` a Layout once per second.
+`v0.0.17` — Live-dashboard polish on top of v0.0.16's strategy pivot. User reported three issues with the new Rich Live mode: process table columns squished to `...`, Disk panel showed `SystemError` again, CPU temp `n/a`. Fixed the first two (real bugs); the third is a hardware limitation explained in the README.
+
+### v0.0.17 fixes
+
+- **Process table columns.** v0.0.16 used `Table(expand=True)` with all columns set to `no_wrap=True` but no explicit widths. Rich proportionally shrank every column equally to fit, so PID / CPU% / MEM / GPU / VRAM collapsed to `...`. Fix: explicit `width=` on each numeric/short column (PID=7, NAME=28, CPU%=6, MEM=8, GPU=4, VRAM=8) and `ratio=1` on COMMAND so it gets the leftover. NAME also gets `overflow="ellipsis"`.
+- **Windows disk panel.** psutil's `disk_usage` C extension raises `SystemError` on some Windows configurations (BitLocker mid-unlock, virtual drives from VPN clients, etc.). New `_windows_disk_usage(mount)` in `probes/disk.py` calls `kernel32!GetDiskFreeSpaceExW` directly via ctypes, returns the same `{total, used, free, percent}` interface as psutil's namedtuple, raises `OSError` on actual API failure. `_disk_usage(mount)` dispatches: Windows → ctypes path, everyone else → psutil. `psutil.disk_partitions` is still used to enumerate mounts — that part works reliably.
+- **CPU temp on i7-13700H still `n/a`.** Not a code bug — the temperature lives in EC registers that modern Intel laptops only expose to vendor drivers. The ACPI WMI thermal zone (`MSAcpi_ThermalZoneTemperature`) returns nothing on these systems, and psutil has no Windows backend. Real fix is LibreHardwareMonitor running with its WMI provider enabled — `_temp_lhm()` already handles that path. Documented as a setup step rather than treated as a bug to chase.
 
 ### v0.0.16 additions
 

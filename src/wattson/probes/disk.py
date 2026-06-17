@@ -1,12 +1,77 @@
-"""Disk probe — usage per readable partition."""
+"""Disk probe — usage per readable partition.
+
+Windows note (v0.0.17): psutil's `disk_usage` C extension can raise
+`SystemError` on some Windows configurations (BitLocker-encrypted
+volumes mid-unlock, ProtonVPN's virtual drives, removable media in
+weird states). We now bypass psutil for the actual usage read on
+Windows and call `GetDiskFreeSpaceExW` directly via ctypes — that
+gives us the same numbers without the surprise exception class.
+psutil is still used for `disk_partitions` since enumerating mounts
+works reliably.
+"""
 
 from __future__ import annotations
+
+import sys
 
 import psutil
 
 
 def _gb(b: int) -> float:
     return b / (1024**3)
+
+
+class _Usage:
+    __slots__ = ("total", "used", "free", "percent")
+
+
+def _windows_disk_usage(mount: str) -> _Usage:
+    """Direct GetDiskFreeSpaceExW via ctypes, bypassing psutil.
+
+    Raises OSError on Windows API failure. Returns an object with the
+    same `total / used / free / percent` attributes as psutil's
+    `sdiskusage` namedtuple so callers don't care which backend ran.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    free_caller = ctypes.c_ulonglong(0)
+    total = ctypes.c_ulonglong(0)
+    free_total = ctypes.c_ulonglong(0)
+
+    fn = ctypes.windll.kernel32.GetDiskFreeSpaceExW
+    fn.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_ulonglong),
+        ctypes.POINTER(ctypes.c_ulonglong),
+        ctypes.POINTER(ctypes.c_ulonglong),
+    ]
+    fn.restype = wintypes.BOOL
+
+    ok = fn(
+        mount,
+        ctypes.byref(free_caller),
+        ctypes.byref(total),
+        ctypes.byref(free_total),
+    )
+    if not ok:
+        err = ctypes.get_last_error()
+        raise OSError(err, f"GetDiskFreeSpaceExW failed for {mount}")
+
+    u = _Usage()
+    u.total = total.value
+    u.free = free_total.value
+    u.used = u.total - u.free
+    u.percent = (u.used / u.total * 100.0) if u.total else 0.0
+    return u
+
+
+def _disk_usage(mount: str):
+    """Cross-platform disk usage: Windows via ctypes, everyone else
+    via psutil. Same attribute interface either way."""
+    if sys.platform == "win32":
+        return _windows_disk_usage(mount)
+    return psutil.disk_usage(mount)
 
 
 # Disk usage doesn't move every second, and on the user's Windows box
@@ -48,7 +113,7 @@ def _snapshot_uncached() -> str:
     first_err: str | None = None
     for p in parts:
         try:
-            u = psutil.disk_usage(p.mountpoint)
+            u = _disk_usage(p.mountpoint)
             mount = p.mountpoint or "?"
             rows.append(
                 f"{mount:<10}  {_gb(u.used):5.0f} / {_gb(u.total):5.0f} GB"
