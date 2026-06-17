@@ -9,7 +9,29 @@ def _gb(b: int) -> float:
     return b / (1024**3)
 
 
+# Disk usage doesn't move every second, and on the user's Windows box
+# `psutil.disk_usage('C:\\')` was raising `SystemError` — re-raising that
+# at 1 Hz visibly slowed the TUI. Cache the rendered string for
+# `_DISK_TTL_SEC` so we pay the cost (success or failure) at most once
+# every 10 s.
+import time as _time
+
+_DISK_TTL_SEC = 10.0
+_disk_cache: dict = {"value": None, "ts": 0.0}
+
+
 def snapshot() -> str:
+    now = _time.monotonic()
+    cached = _disk_cache["value"]
+    if cached is not None and now - _disk_cache["ts"] < _DISK_TTL_SEC:
+        return cached
+    value = _snapshot_uncached()
+    _disk_cache["value"] = value
+    _disk_cache["ts"] = now
+    return value
+
+
+def _snapshot_uncached() -> str:
     """Render one line per readable partition.
 
     Tries `all=False` first (mounted/fixed only), falls back to

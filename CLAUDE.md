@@ -6,7 +6,18 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.12` — second perf pass. v0.0.11's caching helped but the user still reported "each command takes much time to respond". Root cause: even with the two-phase optimisation, `processes.snapshot()` runs entirely on Textual's main thread, and on Windows it still spends enough time per tick to delay key events. Fix is to move the snapshot to a worker thread via `@work(thread=True)` and route results back through `call_from_thread`. Also got better disk panel diagnostics — the user saw "no readable partitions" on a perfectly working C: drive, which meant the inner loop was masking real exceptions silently.
+`v0.0.13` — third perf pass. v0.0.12 moved only the process snapshot off the main thread; user still reported lag and the new disk diagnostic surfaced `SystemError` (a CPython-internal exception class) from psutil's C extension on their box. Re-raising and catching that at 1 Hz on the main thread is what's visible. Fix: every heavy probe now runs in its own `@work(thread=True)` worker, and the disk snapshot string is cached.
+
+### v0.0.13 additions / fixes
+
+- **Three worker groups, three intervals.** `WattsonApp.on_mount` now starts three workers and schedules each with `set_interval`:
+  - `_refresh_panels` (`group="panels"`, 1 Hz) — calls `cpu.snapshot()`, `gpu.snapshot()`, `memory.snapshot()`, `disk.snapshot()` on the worker thread. Results returned as `{panel_id: text}` via `call_from_thread(self._apply_panels, snapshots)`. The sink sets the reactive `.body` on each `StatPanel`, which schedules its re-render in Textual's normal pipeline.
+  - `_refresh_metrics` (`group="metrics"`, 1 Hz) — calls `cpu.metrics()`, `memory.metrics()`, `gpu.metrics()`, `gpu.throttle_masks()` on the worker. Returns `(all_metrics, masks)` to `_apply_metrics`, which feeds HISTORY + WATCHDOG + sub-title from the main thread.
+  - `_refresh_processes` (`group="processes"`, 2 Hz) — unchanged from v0.0.12.
+- All three use `exclusive=True` so a stalled probe can't pile up calls. `group=...` keeps them in separate worker pools.
+- **Main thread is now ~free.** The only main-thread work per tick is the three interval callbacks (each of which just schedules a worker), Textual's compositor, and key event dispatch. Pressing `t` / `g` / `k` / etc. should feel instant.
+- **`_refresh_all` shim** updated to fire `_refresh_panels()` + `_refresh_metrics()`. The kill / priority / affinity / power-limit callbacks still call it; the process snapshot keeps its 2 s cadence.
+- **Disk caching.** `disk.snapshot()` wraps `_snapshot_uncached()` in a 10 s cache (`_DISK_TTL_SEC`). User's box raises `SystemError` per partition every call (~10-50 ms of exception-handling cost each); paying that once every 10 s instead of every second is ~90 % cheaper for that probe.
 
 ### v0.0.12 additions / fixes
 

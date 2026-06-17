@@ -892,13 +892,14 @@ class WattsonApp(App):
         self.sub_title = "your machine's personal assistant"
         # De-dup toasts: each `_notify_once(key, ...)` fires at most once.
         self._notified: set[str] = set()
-        # Two cadences: fast probes on the main thread (cpu/mem/disk/gpu
-        # stat panels + watchdog) on 1 Hz, slow probes (process snapshot)
-        # on a 2 s worker so the UI thread isn't blocked. Pressing a key
-        # while the worker is running stays instant.
-        self._refresh_light()
+        # Everything heavy runs in worker threads now (panels, metrics,
+        # processes). The main thread only handles interval ticks and
+        # key events — those stay instant even when probes are slow.
+        self._refresh_panels()
+        self._refresh_metrics()
         self._refresh_processes()
-        self.set_interval(1.0, self._refresh_light)
+        self.set_interval(1.0, self._refresh_panels)
+        self.set_interval(1.0, self._refresh_metrics)
         self.set_interval(2.0, self._refresh_processes)
 
     def action_refresh(self) -> None:
@@ -1033,32 +1034,74 @@ class WattsonApp(App):
     def _refresh_all(self) -> None:
         """Compatibility shim — older callers (kill/priority/affinity/
         power-limit callbacks) call this to nudge a refresh after a
-        controlling action. Now just delegates to the light path; the
-        process snapshot will catch up on its own 2 s cadence."""
-        self._refresh_light()
+        controlling action. Triggers the panel + metric workers; the
+        process snapshot catches up on its own 2 s cadence."""
+        self._refresh_panels()
+        self._refresh_metrics()
 
-    def _refresh_light(self) -> None:
-        """Fast path on the main thread: stat panels + metrics + watchdog."""
-        for panel in self.query(StatPanel):
-            panel.refresh_body()
+    @work(exclusive=True, thread=True, group="panels")
+    def _refresh_panels(self) -> None:
+        """Snapshot strings for the four stat panels — on a worker
+        thread because gpu.snapshot() makes 8+ NVML calls per refresh
+        and disk.snapshot() can raise `SystemError` from the psutil C
+        extension (slow). exclusive=True ensures only one in flight."""
+        snapshots: dict[str, str] = {}
+        for panel_id, getter in (
+            ("cpu-panel",  cpu.snapshot),
+            ("gpu-panel",  gpu.snapshot),
+            ("mem-panel",  memory.snapshot),
+            ("disk-panel", disk.snapshot),
+        ):
+            try:
+                snapshots[panel_id] = getter()
+            except Exception as e:
+                snapshots[panel_id] = (
+                    f"[red]probe error:[/red] "
+                    f"{type(e).__name__}: {e}"
+                )
+        self.call_from_thread(self._apply_panels, snapshots)
+
+    def _apply_panels(self, snapshots: dict[str, str]) -> None:
+        """Main-thread sink for `_refresh_panels`. Sets the reactive
+        `body` on each StatPanel, which schedules its re-render."""
+        for panel_id, text in snapshots.items():
+            try:
+                self.query_one(f"#{panel_id}", StatPanel).body = text
+            except Exception:
+                pass
+
+    @work(exclusive=True, thread=True, group="metrics")
+    def _refresh_metrics(self) -> None:
+        """Metric collection for HISTORY + WATCHDOG — also a worker
+        because gpu.metrics() and gpu.throttle_masks() make their own
+        round of NVML calls."""
         try:
             all_metrics: dict[str, float] = {}
             all_metrics.update(cpu.metrics())
             all_metrics.update(memory.metrics())
             all_metrics.update(gpu.metrics())
-            HISTORY.add_many(all_metrics)
-            WATCHDOG.check(all_metrics, gpu.throttle_masks())
-            count = WATCHDOG.session_count
-            base = "your machine's personal assistant"
-            self.sub_title = f"{base} · ⚠ {count}" if count else base
+            masks = gpu.throttle_masks()
         except Exception as e:
-            self._notify_once(
+            self.call_from_thread(
+                self._notify_once,
                 "metrics-error",
-                f"metrics/watchdog error: {type(e).__name__}: {e}",
+                f"metrics error: {type(e).__name__}: {e}",
                 "error",
             )
+            return
+        self.call_from_thread(self._apply_metrics, all_metrics, masks)
 
-    @work(exclusive=True, thread=True)
+    def _apply_metrics(
+        self, all_metrics: dict[str, float], masks: dict[int, int],
+    ) -> None:
+        """Main-thread sink for `_refresh_metrics`."""
+        HISTORY.add_many(all_metrics)
+        WATCHDOG.check(all_metrics, masks)
+        count = WATCHDOG.session_count
+        base = "your machine's personal assistant"
+        self.sub_title = f"{base} · ⚠ {count}" if count else base
+
+    @work(exclusive=True, thread=True, group="processes")
     def _refresh_processes(self) -> None:
         """Heavy path on a worker thread.
 

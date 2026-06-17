@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.12-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.13-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.12` — second perf pass. Process snapshot now runs on a Textual `@work` thread so key events stay instant even while the snapshot is in flight; light probes stay on the main thread at 1 Hz, process refresh drops to 2 Hz on the worker. Disk panel surfaces the actual exception class instead of silently saying "no readable partitions".
+**Status:** `v0.0.13` — third perf pass. Every heavy probe (stat panels, metrics, processes) now runs in its own `@work(thread=True)` worker. The main thread does **nothing** but interval ticks and key events. Disk snapshot string is also cached for 10 s, since the user's box raised `SystemError` from psutil's C extension and re-raising at 1 Hz was visibly slow.
 
 ## Planned features
 
