@@ -1,3 +1,3 @@
 """wattson — your machine's personal assistant."""
 
-__version__ = "0.0.17"
+__version__ = "0.0.18"

@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.17-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.18-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.17` — Live-dashboard polish. Fixed two specific issues with the v0.0.16 Rich Live mode: process table columns were collapsing to `...` because `expand=True` shrank everything equally (now explicit `width=` on the numeric columns + `ratio=1` on COMMAND); and the Windows Disk panel kept raising `SystemError` from psutil's C extension (now bypassed via direct `GetDiskFreeSpaceExW` ctypes call). CPU temperature on the i7-13700H still shows `n/a` — that's a real hardware limitation (Intel's modern laptops hide the package temperature behind vendor EC registers), fixable by installing LibreHardwareMonitor.
+**Status:** `v0.0.18` — added WSL2 install path. The native-Windows code path is solid now, but for Windows users running DL workloads inside WSL Ubuntu, **wattson runs significantly snappier inside WSL** (Linux `psutil`, native `/proc` and `/sys` reads, no WMI dance for CPU temp, NVML works via NVIDIA's WSL2 CUDA driver). README has step-by-step setup. v0.0.17 fixes still apply: process table column widths are explicit, Windows disk reads use ctypes directly, CPU temp on the i7-13700H needs LibreHardwareMonitor on bare metal but reads cleanly in WSL.
 
 ## Planned features
 
@@ -54,6 +54,33 @@ python -m venv .venv
 pip install -e ".[dev]"
 wattson         # or: python -m wattson
 ```
+
+### Running on WSL2 (recommended if you train inside WSL)
+
+Windows users who run DL workloads in WSL Ubuntu will get a **noticeably snappier** experience than native Windows, because:
+
+- Linux `psutil` is fast (no `cmdline()` slowdown, no `SystemError` on disk reads)
+- Rich's ANSI rendering through the WSL terminal is lighter than Windows Terminal driving Textual/Rich for the native Python
+- CPU temperature reads work via `/sys/class/thermal/thermal_zone*/temp` (no WMI / LHM dance)
+- NVIDIA's WSL2 CUDA driver makes NVML work natively — GPU monitoring is identical to bare-metal Linux
+
+**Setup** (inside your WSL Ubuntu shell):
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv git
+
+git clone https://github.com/Anjanamb/wattson.git
+cd wattson
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+wattson
+```
+
+**Important caveat:** wattson in WSL only sees the **WSL Linux environment** — your training processes, the host GPU (via the WSL2 NVIDIA driver), host CPU stats, WSL's memory budget. It does **not** see Windows processes (`explorer.exe`, etc.) or Windows-native disk usage. If you want the full-Windows view, run wattson on the Windows side. If you want to monitor your DL workloads, WSL is the better experience.
+
+**GPU prerequisite:** NVIDIA Windows driver ≥ 470, WSL2 (not WSL1), and the NVIDIA Container Toolkit isn't required — just `pip install nvidia-ml-py` (which wattson does already) and the driver does the rest.
 
 CLI reference:
 

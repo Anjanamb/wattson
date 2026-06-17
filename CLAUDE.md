@@ -6,7 +6,17 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.17` — Live-dashboard polish on top of v0.0.16's strategy pivot. User reported three issues with the new Rich Live mode: process table columns squished to `...`, Disk panel showed `SystemError` again, CPU temp `n/a`. Fixed the first two (real bugs); the third is a hardware limitation explained in the README.
+`v0.0.18` — added a WSL2 install path to the README. User asked whether running wattson inside WSL would dodge the Windows-specific bottlenecks; answer is yes for the typical DL-on-WSL workflow, so it's worth documenting.
+
+### v0.0.18 additions
+
+- **WSL2 install section** in `README.md`. Why it's faster:
+  - Linux `psutil` doesn't have the `SystemError` regressions the Windows C extension hits.
+  - `/sys/class/thermal/thermal_zone*/temp` is readable directly — no WMI / LibreHardwareMonitor required for CPU temperature.
+  - Rich's ANSI rendering through the WSL terminal is lighter than Windows Terminal driving Textual + asyncio for the native Python.
+  - NVML works via NVIDIA's WSL2 CUDA driver — GPU monitoring is identical to bare-metal Linux.
+- **Caveat documented:** wattson in WSL only sees the WSL Linux environment (its own processes, host GPU via NVML, host CPU stats), not Windows processes or Windows-native disk usage. For a DL workflow where training runs in WSL anyway, that's exactly what you want; for whole-Windows monitoring, run wattson on the Windows side.
+- **No code changes.** WSL `sys.platform == "linux"`, so the Linux probe paths just work — psutil for everything except GPU, NVML for GPU. The Windows-specific code added in v0.0.11–v0.0.17 (WMI temperature, ctypes disk usage) simply doesn't trigger.
 
 ### v0.0.17 fixes
 
