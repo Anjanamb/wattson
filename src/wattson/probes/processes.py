@@ -195,6 +195,57 @@ def terminate(pid: int) -> TerminateResult:
         return {"ok": False, "message": f"Failed to terminate {pid}: {e}"}
 
 
+def cpu_affinity_info(pid: int) -> dict | None:
+    """Return `{current: [int], total: int}` for `pid`, or None if
+    affinity isn't queryable (macOS, gone process, denied)."""
+    try:
+        p = psutil.Process(pid)
+        current = p.cpu_affinity()
+    except (NotImplementedError, AttributeError):
+        return None
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+    except Exception:
+        return None
+    total = psutil.cpu_count(logical=True) or 1
+    return {"current": sorted(current), "total": total}
+
+
+def set_affinity(pid: int, cores: list[int]) -> TerminateResult:
+    """Pin `pid` to the given CPU core indices.
+
+    macOS doesn't support affinity (psutil raises NotImplementedError);
+    we surface that as a friendly message rather than a crash. Returns
+    the same `{ok, message}` shape as `terminate`/`set_priority`.
+    """
+    if not cores:
+        return {"ok": False, "message": "Must select at least one CPU."}
+    try:
+        p = psutil.Process(pid)
+        p.cpu_affinity(list(cores))
+        joined = ",".join(map(str, cores))
+        return {
+            "ok": True,
+            "message": f"Pinned PID {pid} to CPU(s) {joined}",
+        }
+    except NotImplementedError:
+        return {
+            "ok": False,
+            "message": "CPU affinity not supported on this OS (macOS).",
+        }
+    except psutil.NoSuchProcess:
+        return {"ok": False, "message": f"PID {pid} no longer exists"}
+    except psutil.AccessDenied:
+        return {
+            "ok": False,
+            "message": f"Access denied for PID {pid} (admin needed?)",
+        }
+    except ValueError as e:
+        return {"ok": False, "message": f"Invalid core list: {e}"}
+    except Exception as e:
+        return {"ok": False, "message": f"Failed: {e}"}
+
+
 def set_priority(pid: int, level: str) -> TerminateResult:
     """Cross-platform process priority adjustment.
 

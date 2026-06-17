@@ -6,7 +6,18 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.9` — Trends screen migrated from `Sparkline` (bar chart) to `textual_plotext.PlotextPlot` (real braille line charts) on user request; CPU panel learned a Windows WMI fallback for ACPI thermal zones, so `Temp:` is no longer permanently `n/a` on Windows boxes where ACPI exposes a thermal zone.
+`v0.0.10` — finishes the planned single-host feature set: per-GPU drill-down (`g`), CPU affinity controls (`a`), and a LibreHardwareMonitor fallback chain for Windows CPU temperature. Multi-host clustering is intentionally out of scope — it's a separate distributed-systems project, not "polish".
+
+### v0.0.10 additions
+
+- **probes/cpu.py — LHM/OHM fallback.** `_temp_lhm()` enumerates Sensor records in `root\\LibreHardwareMonitor` (and `root\\OpenHardwareMonitor` for legacy installs), filters to `SensorType == "Temperature"` with "CPU" in the name, and returns the **hottest** reading — that's the package, not an idle core. `_temp()` chain is now psutil → ACPI WMI → LHM/OHM → `n/a`. Requires LHM running with the WMI provider enabled.
+- **probes/processes.py — CPU affinity.**
+  - `cpu_affinity_info(pid)` returns `{current: [int], total: int}` or `None` (macOS / gone / denied). `total = psutil.cpu_count(logical=True)`.
+  - `set_affinity(pid, cores)` wraps `psutil.Process.cpu_affinity(cores)`. macOS NotImplementedError, AccessDenied, NoSuchProcess, ZombieProcess, and ValueError are all caught and surfaced as friendly `{ok: False, message: ...}` strings.
+- **probes/gpu.py — `device_info(idx)`** for the drill-down: `{name, uuid, serial, pcie}`. Each NVML call individually try-fenced; serial is usually `n/a` without admin.
+- **app.py — `SetAffinity` ModalScreen.** Centred 72×15 grid with: question label, current/total info line, `Input` for the core list, and Cancel / All cores / Apply buttons. Input parser accepts `0,1,2,3` and `0-7,16-19` style. Client-side validation: integer parse, non-empty, in `[0, total)`.
+- **app.py — `GPUDrillScreen`.** Pushed via the new `g` keybinding. Scrollable layout: Hardware (`device_info`, cached after first paint), Current (live util / MemBW / temp / VRAM% / power + throttle reasons), 4 line charts (util, temp, power, VRAM%), and a DataTable filtered to processes whose `gpu_idx == self.gpu_idx`. Sub-title is `GPU{idx} drill-down`. Always opens GPU 0 for now — the multi-GPU picker stays on the roadmap.
+- **WattsonApp.** Two new bindings (`a`, `g`) and matching action handlers + callback factories that follow the established `notify(...)` pattern.
 
 ### v0.0.9 additions
 

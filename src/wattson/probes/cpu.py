@@ -59,10 +59,13 @@ def _temp_psutil() -> str | None:
 
 
 def _temp_wmi() -> str | None:
-    """Windows ACPI thermal zone via WMI. Many modern laptops don't
-    expose this in ACPI (the temp lives in EC registers behind vendor
-    drivers); for those a future LibreHardwareMonitor backend would be
-    the proper answer."""
+    """Windows ACPI thermal zone via WMI's `root\\wmi` namespace.
+
+    Many modern laptops don't expose CPU temperature here — the value
+    lives in EC registers behind vendor drivers. `_temp_lhm()` handles
+    those when LibreHardwareMonitor (or OpenHardwareMonitor) is
+    running with its WMI provider enabled.
+    """
     try:
         import wmi  # type: ignore[import-not-found]
     except ImportError:
@@ -75,7 +78,6 @@ def _temp_wmi() -> str | None:
     if not zones:
         return None
     try:
-        # CurrentTemperature is in tenths of Kelvin
         kelvin = zones[0].CurrentTemperature / 10.0
         celsius = kelvin - 273.15
         if -50 < celsius < 200:
@@ -85,12 +87,63 @@ def _temp_wmi() -> str | None:
     return None
 
 
+def _temp_lhm() -> str | None:
+    """LibreHardwareMonitor / OpenHardwareMonitor WMI provider.
+
+    LHM exposes its sensors in `root\\LibreHardwareMonitor`; older OHM
+    used `root\\OpenHardwareMonitor`. Each Sensor row carries `Name`,
+    `SensorType`, `Value`. We look for a Temperature sensor whose Name
+    mentions CPU and return the first non-empty Value.
+
+    Requires LHM/OHM to be running (often as admin) with the WMI
+    provider enabled. Returns None otherwise — quiet best-effort.
+    """
+    try:
+        import wmi  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+
+    candidates: list[float] = []
+    for ns in ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"):
+        try:
+            w = wmi.WMI(namespace=ns)
+        except Exception:
+            continue
+        try:
+            sensors = w.Sensor()
+        except Exception:
+            continue
+        for s in sensors:
+            try:
+                if getattr(s, "SensorType", "") != "Temperature":
+                    continue
+                name = getattr(s, "Name", "") or ""
+                if "CPU" not in name.upper():
+                    continue
+                val = getattr(s, "Value", None)
+                if val is None:
+                    continue
+                fval = float(val)
+                if -50 < fval < 200:
+                    candidates.append(fval)
+            except Exception:
+                continue
+    if not candidates:
+        return None
+    # Prefer the hottest reading — that's the package, not an idle core.
+    return f"{max(candidates):.0f}°C"
+
+
 def _temp() -> str:
     """Best-effort CPU temperature; returns a human string or 'n/a'.
 
-    Order: psutil sensors (Linux/macOS) → WMI ACPI thermal zone
-    (Windows). Falls back to 'n/a' on platforms / hardware where
-    neither works.
+    Order:
+      1. psutil sensors (Linux / FreeBSD / macOS)
+      2. Windows WMI ACPI thermal zone (some Intel boxes)
+      3. LibreHardwareMonitor / OpenHardwareMonitor WMI provider
+         (modern laptops where ACPI hides the EC temperature)
+
+    Falls back to 'n/a' when none of the above work.
     """
     import sys
 
@@ -99,6 +152,9 @@ def _temp() -> str:
         return t
     if sys.platform == "win32":
         t = _temp_wmi()
+        if t is not None:
+            return t
+        t = _temp_lhm()
         if t is not None:
             return t
     return "n/a"

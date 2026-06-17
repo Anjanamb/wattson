@@ -307,6 +307,120 @@ class SetPowerLimit(ModalScreen[int | None]):
         self.dismiss(value)
 
 
+class SetAffinity(ModalScreen[list[int] | None]):
+    """Pick a subset of CPU cores for the selected process.
+
+    Accepts a comma- and dash-separated list (e.g. `0,1,2,3` or `0-7,16-19`).
+    Dismisses with the parsed list or `None` for cancel. macOS doesn't
+    expose affinity at all; the parent screen never opens this modal in
+    that case.
+    """
+
+    DEFAULT_CSS = """
+    SetAffinity {
+        align: center middle;
+    }
+    SetAffinity > Grid {
+        grid-size: 3;
+        grid-rows: 3 1 3 3;
+        grid-gutter: 1 2;
+        padding: 1 2;
+        width: 72;
+        height: 15;
+        border: thick #38bdf8;
+        background: #14171c;
+    }
+    SetAffinity Label.lbl {
+        column-span: 3;
+        content-align: center middle;
+        color: #e6e8eb;
+    }
+    SetAffinity Input {
+        column-span: 3;
+    }
+    SetAffinity Button { width: 100%; }
+    """
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(
+        self,
+        pid: int,
+        name: str,
+        current: list[int],
+        total: int,
+    ) -> None:
+        # See ConfirmKill: `name` is reserved on Widget.
+        super().__init__()
+        self.pid = pid
+        self.proc_name = name
+        self.current = current
+        self.total = total
+
+    def compose(self) -> ComposeResult:
+        with Grid():
+            yield Label(
+                f"CPU affinity — PID {self.pid}  ({self.proc_name})",
+                classes="lbl",
+            )
+            cur_str = ",".join(map(str, self.current)) or "(none)"
+            yield Label(
+                f"Now: {cur_str}  ·  Available: 0–{self.total - 1}",
+                classes="lbl",
+            )
+            yield Input(
+                placeholder="e.g. 0,1,2,3  or  0-7,16-19",
+                id="cores",
+            )
+            yield Button("Cancel",    id="cancel")
+            yield Button("All cores", id="all")
+            yield Button("Apply",     variant="warning", id="apply")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "all":
+            self.dismiss(list(range(self.total)))
+            return
+        # Apply path
+        raw = self.query_one("#cores", Input).value.strip()
+        try:
+            cores = self._parse_cores(raw)
+        except ValueError as e:
+            self.app.notify(f"Invalid: {e}", severity="error", timeout=3)
+            return
+        if not cores:
+            self.app.notify(
+                "Pick at least one core.", severity="error", timeout=2,
+            )
+            return
+        bad = [c for c in cores if c < 0 or c >= self.total]
+        if bad:
+            self.app.notify(
+                f"Out of range: {bad}", severity="error", timeout=3,
+            )
+            return
+        self.dismiss(cores)
+
+    @staticmethod
+    def _parse_cores(raw: str) -> list[int]:
+        """Parse '0,1,2-7,16-19' → [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19]."""
+        if not raw:
+            return []
+        out: set[int] = set()
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if "-" in token:
+                lo, hi = token.split("-", 1)
+                out.update(range(int(lo), int(hi) + 1))
+            else:
+                out.add(int(token))
+        return sorted(out)
+
+
 class HardwareScreen(Screen):
     """Full-screen hardware inventory. Scrollable when content overflows."""
 
@@ -462,6 +576,196 @@ class TrendsScreen(Screen):
                 continue
 
 
+class GPUDrillScreen(Screen):
+    """Per-GPU drill-down: hardware info + live metrics + per-metric
+    line charts + processes filtered to this GPU.
+
+    Opened by the `g` binding on the main dashboard. For multi-GPU rigs
+    a future picker modal will let you choose the index; for now this
+    always opens GPU 0.
+    """
+
+    DEFAULT_CSS = """
+    GPUDrillScreen { background: #0b0d10; }
+    GPUDrillScreen ScrollableContainer { padding: 1 2; }
+    GPUDrillScreen Static.section-title {
+        color: #00e5ff;
+        text-style: bold;
+        margin: 1 0 0 0;
+    }
+    GPUDrillScreen Static.section {
+        color: #e6e8eb;
+    }
+    GPUDrillScreen Static.drill-label {
+        margin: 1 0 0 0;
+        height: 1;
+        color: #e6e8eb;
+    }
+    GPUDrillScreen PlotextPlot {
+        height: 6;
+        margin: 0 0 0 0;
+    }
+    GPUDrillScreen DataTable {
+        height: 8;
+        margin: 1 0 0 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("g",      "app.pop_screen", "Back"),
+        Binding("q",      "app.pop_screen", "Back"),
+    ]
+
+    _METRICS = (
+        ("util",     "Util %",   "green"),
+        ("temp",     "Temp °C",  "red"),
+        ("power",    "Power W",  "magenta"),
+        ("vram_pct", "VRAM %",   "yellow"),
+    )
+
+    def __init__(self, gpu_idx: int) -> None:
+        super().__init__()
+        self.gpu_idx = gpu_idx
+        self._hw_done = False
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with ScrollableContainer():
+            yield Static("Hardware", classes="section-title")
+            yield Static("loading…", id="drill-hw", classes="section")
+            yield Static("Current", classes="section-title")
+            yield Static("loading…", id="drill-current", classes="section")
+            yield Static("History (last 60 s)", classes="section-title")
+            for metric, label, _colour in self._METRICS:
+                yield Static(label, id=f"drill-lbl-{metric}",
+                             classes="drill-label")
+                yield PlotextPlot(id=f"drill-plot-{metric}")
+            yield Static("Processes on this GPU", classes="section-title")
+            yield DataTable(id="drill-procs")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "wattson"
+        self.sub_title = f"GPU{self.gpu_idx} drill-down"
+        try:
+            table = self.query_one("#drill-procs", DataTable)
+            table.cursor_type = "row"
+            table.zebra_stripes = True
+            table.add_columns("PID", "NAME", "VRAM MB", "CPU%", "MEM MB")
+        except Exception:
+            pass
+        self._refresh()
+        self.set_interval(1.0, self._refresh)
+
+    def _refresh(self) -> None:
+        self._refresh_hw()
+        self._refresh_current()
+        self._refresh_plots()
+        self._refresh_procs()
+
+    def _refresh_hw(self) -> None:
+        if self._hw_done:
+            return
+        try:
+            target = self.query_one("#drill-hw", Static)
+        except Exception:
+            return
+        info = gpu.device_info(self.gpu_idx)
+        if info is None:
+            target.update("(GPU info unavailable)")
+            return
+        lines = [
+            f"[bold]{info.get('name', '?')}[/bold]",
+            f"UUID:    {info.get('uuid', 'n/a')}",
+            f"Serial:  {info.get('serial', 'n/a')}",
+        ]
+        if "pcie" in info:
+            lines.append(f"PCIe:    {info['pcie']}")
+        target.update("\n".join(lines))
+        self._hw_done = True
+
+    def _refresh_current(self) -> None:
+        try:
+            target = self.query_one("#drill-current", Static)
+        except Exception:
+            return
+        m = gpu.metrics()
+        idx = self.gpu_idx
+        util = m.get(f"gpu{idx}.util")
+        mem_bw = m.get(f"gpu{idx}.mem_bw")
+        temp = m.get(f"gpu{idx}.temp")
+        power = m.get(f"gpu{idx}.power")
+        vram_pct = m.get(f"gpu{idx}.vram_pct")
+        if util is None and temp is None:
+            target.update("(no live metrics yet)")
+            return
+        head_parts = []
+        if util is not None:
+            head_parts.append(f"Util: {util:>3.0f}%")
+        if mem_bw is not None:
+            head_parts.append(f"MemBW: {mem_bw:>3.0f}%")
+        if temp is not None:
+            head_parts.append(f"Temp: {temp:>3.0f}°C")
+        lines = ["  ·  ".join(head_parts)]
+        if vram_pct is not None:
+            lines.append(f"VRAM:  {vram_pct:>5.1f}%")
+        if power is not None:
+            lines.append(f"Power: {power:>5.1f} W")
+        masks = gpu.throttle_masks()
+        mask = masks.get(idx, 0)
+        if mask:
+            lines.append(
+                f"[yellow]Throttle:[/yellow] {gpu.throttle_text(mask)}"
+            )
+        target.update("\n".join(lines))
+
+    def _refresh_plots(self) -> None:
+        idx = self.gpu_idx
+        for metric, _label, colour in self._METRICS:
+            key = f"gpu{idx}.{metric}"
+            data = HISTORY.get(key)
+            try:
+                plot = self.query_one(
+                    f"#drill-plot-{metric}", PlotextPlot,
+                )
+                plot.plt.clear_figure()
+                if data:
+                    plot.plt.plot(
+                        list(range(len(data))), data,
+                        marker="braille", color=colour,
+                    )
+                    plot.plt.theme("dark")
+                plot.refresh()
+            except Exception:
+                continue
+
+    def _refresh_procs(self) -> None:
+        try:
+            table = self.query_one("#drill-procs", DataTable)
+        except Exception:
+            return
+        rows = processes.snapshot(limit=50)
+        gpu_rows = [r for r in rows if r.get("gpu_idx") == self.gpu_idx]
+        cursor = table.cursor_row
+        table.clear()
+        for r in gpu_rows:
+            try:
+                vram_mb = r.get("vram_mb")
+                vram = f"{vram_mb:.0f}" if vram_mb is not None else "—"
+                table.add_row(
+                    Text(str(r["pid"])),
+                    Text(r["name"][:30]),
+                    Text(vram),
+                    Text(f"{r['cpu_pct']:.1f}"),
+                    Text(f"{r['mem_mb']:.0f}"),
+                )
+            except Exception:
+                continue
+        if 0 <= cursor < table.row_count:
+            table.move_cursor(row=cursor)
+
+
 class WatchdogScreen(Screen):
     """Tails the watchdog JSONL log; refreshes every 2 s.
 
@@ -563,7 +867,9 @@ class WattsonApp(App):
         Binding("r", "refresh", "Refresh"),
         Binding("k", "kill", "Kill"),
         Binding("n", "priority", "Nice/Prio"),
+        Binding("a", "affinity", "Affinity"),
         Binding("p", "power_limit", "Power"),
+        Binding("g", "gpu_drill", "GPU drill"),
         Binding("i", "hardware", "Hardware"),
         Binding("t", "trends", "Trends"),
         Binding("w", "watchdog", "Watchdog"),
@@ -641,6 +947,49 @@ class WattsonApp(App):
             self.notify(result["message"], severity=severity, timeout=3)
             self._refresh_all()
         return cb
+
+    def action_affinity(self) -> None:
+        table = self.query_one("#processes-table", ProcessTable)
+        row = table.selected()
+        if row is None:
+            self.notify(
+                "No process selected.", severity="warning", timeout=2,
+            )
+            return
+        info = processes.cpu_affinity_info(row["pid"])
+        if info is None:
+            self.notify(
+                "CPU affinity unavailable (macOS or no permission).",
+                severity="warning", timeout=3,
+            )
+            return
+        self.push_screen(
+            SetAffinity(
+                row["pid"], row["name"],
+                info["current"], info["total"],
+            ),
+            self._make_affinity_callback(row["pid"]),
+        )
+
+    def _make_affinity_callback(self, pid: int):
+        def cb(cores: list[int] | None) -> None:
+            if cores is None:
+                return
+            result = processes.set_affinity(pid, cores)
+            severity = "warning" if result["ok"] else "error"
+            self.notify(result["message"], severity=severity, timeout=4)
+            self._refresh_all()
+        return cb
+
+    def action_gpu_drill(self) -> None:
+        if gpu.device_count() <= 0:
+            self.notify(
+                "No NVIDIA GPU detected.",
+                severity="warning", timeout=2,
+            )
+            return
+        # GPU 0 by default. Multi-GPU picker is roadmapped.
+        self.push_screen(GPUDrillScreen(0))
 
     def action_power_limit(self) -> None:
         # GPU0 by default. Multi-GPU selection comes with the per-GPU

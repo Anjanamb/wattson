@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.9-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.10-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.9` — Trends screen now uses real braille **line charts** (via `textual-plotext` / `plotext`) instead of sparkline bars, and **Windows CPU temperature** is read from WMI ACPI thermal zones when psutil has no Windows backend.
+**Status:** `v0.0.10` — finishes the planned single-host feature set: **per-GPU drill-down** (`g`), **CPU affinity** controls (`a`), and a **LibreHardwareMonitor** fallback for Windows CPU temperature on laptops where ACPI hides it. Multi-host clustering remains intentionally out of scope.
 
 ## Planned features
 
@@ -34,14 +34,14 @@ A terminal UI for the bits of system monitoring that matter when you're running 
 - [x] **Process priority control** — `n` on the selected row opens Low / Normal / High buttons (or `l` / `n` / `h` shortcuts); psutil maps to nice values on Unix and PRIORITY_CLASS on Windows. High typically needs admin and surfaces an `Access denied` toast *(v0.0.7)*
 - [x] **GPU power-limit control** — `p` opens a modal showing the current draw / cap / driver-reported min–max range and accepts a target wattage. Apply requires admin; failure path surfaces a clear error toast *(v0.0.7)*
 - [x] **Line-chart Trends** — `t` now renders real braille line charts via `textual-plotext` / `plotext` rather than sparkline bars. Per-metric colours (CPU cyan · GPU green · memory blue · temps red · power magenta) with current / min / max in each row's label *(v0.0.9)*
-- [x] **Windows CPU temperature** — falls back to WMI `MSAcpi_ThermalZoneTemperature` when psutil has no Windows backend. (Works on systems with ACPI thermal zones; modern laptops often need LibreHardwareMonitor — TBD.) *(v0.0.9)*
+- [x] **Windows CPU temperature** — falls back to WMI `MSAcpi_ThermalZoneTemperature` when psutil has no Windows backend, then to LibreHardwareMonitor / OpenHardwareMonitor for modern laptops that hide CPU temp behind the EC *(v0.0.9 + v0.0.10)*
+- [x] **CPU affinity controls** — `a` on the selected row opens a modal that accepts a flexible core list (`0,1,2,3` or `0-7,16-19`); `All cores` button restores everything. Cross-platform via `psutil.Process.cpu_affinity()`; macOS surfaces a friendly "not supported" message instead of a crash *(v0.0.10)*
+- [x] **Per-GPU drill-down screen** — `g` opens a dedicated view with the GPU's hardware info (name, UUID, serial, PCIe gen+width), live current values + throttle reasons, four braille line charts (util / temp / power / VRAM %), and a filtered table of processes holding VRAM on that GPU. Single-GPU rigs always drill into GPU 0; multi-GPU picker is the only thing still TBD here *(v0.0.10)*
 
 ### Coming
 
-- [ ] CPU-affinity controls (currently priority only)
-- [ ] Per-GPU drill-in screen (focus on one GPU at a time, with picker for the power-limit dialog on multi-GPU rigs)
-- [ ] Multi-host — watch a small training cluster from one terminal
-- [ ] LibreHardwareMonitor backend for richer Windows temperatures (modern laptops hide CPU temp behind vendor EC; LHM exposes it via its own WMI namespace)
+- [ ] Multi-host — watch a small training cluster from one terminal (separate distributed-systems project; not "polish")
+- [ ] Multi-GPU picker modal (currently `g` always opens GPU 0)
 
 ## Install (dev)
 
@@ -62,7 +62,9 @@ Inside the TUI:
 - `↑` / `↓` — move the row cursor in the process table
 - `k` — kill the selected process (with a confirmation modal — `y` / `n` / `Esc`)
 - `n` — change priority of the selected process (`l` / `n` / `h` for Low / Normal / High; `Esc` to cancel)
+- `a` — set CPU affinity of the selected process (comma/dash list or `All cores`)
 - `p` — set GPU0 power limit (input is in watts; needs admin to apply)
+- `g` — open the per-GPU drill-down (`g` / `q` / `Esc` to return)
 - `i` — open the hardware-inventory screen (`i` / `q` / `Esc` to return)
 - `t` — open the live trends screen (`t` / `q` / `Esc` to return)
 - `w` — open the watchdog event log (`w` / `q` / `Esc` to return)

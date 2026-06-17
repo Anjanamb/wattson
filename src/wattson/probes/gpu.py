@@ -228,6 +228,64 @@ def device_count() -> int:
         return 0
 
 
+def device_info(idx: int = 0) -> dict | None:
+    """Static hardware info for the drill-down screen.
+
+    Returns `{name, uuid, serial, pcie}` (any field may be `'n/a'`).
+    `None` if NVML unavailable or `idx` is out of range. Each NVML
+    call is individually fenced so partial-info drivers still surface
+    what they can.
+    """
+    if not _init():
+        return None
+    try:
+        from pynvml import (
+            nvmlDeviceGetCurrPcieLinkGeneration,
+            nvmlDeviceGetCurrPcieLinkWidth,
+            nvmlDeviceGetHandleByIndex,
+            nvmlDeviceGetMaxPcieLinkGeneration,
+            nvmlDeviceGetMaxPcieLinkWidth,
+            nvmlDeviceGetName,
+            nvmlDeviceGetSerial,
+            nvmlDeviceGetUUID,
+        )
+
+        h = nvmlDeviceGetHandleByIndex(idx)
+    except Exception:
+        return None
+
+    def _try_str(fn):
+        try:
+            v = fn(h)
+            if isinstance(v, bytes):
+                v = v.decode(errors="replace")
+            return str(v)
+        except Exception:
+            return None
+
+    def _try(fn):
+        try:
+            return fn(h)
+        except Exception:
+            return None
+
+    info = {
+        "name":   _try_str(nvmlDeviceGetName) or "?",
+        "uuid":   _try_str(nvmlDeviceGetUUID) or "n/a",
+        "serial": _try_str(nvmlDeviceGetSerial) or "n/a",
+    }
+    cur_gen = _try(nvmlDeviceGetCurrPcieLinkGeneration)
+    cur_w   = _try(nvmlDeviceGetCurrPcieLinkWidth)
+    max_gen = _try(nvmlDeviceGetMaxPcieLinkGeneration)
+    max_w   = _try(nvmlDeviceGetMaxPcieLinkWidth)
+    if cur_gen and cur_w:
+        pcie = f"gen{cur_gen} x{cur_w}"
+        if max_gen and max_w and (cur_gen, cur_w) != (max_gen, max_w):
+            pcie += f"  (max gen{max_gen} x{max_w})"
+        info["pcie"] = pcie
+    return info
+
+
 def power_limit_info(idx: int = 0) -> dict | None:
     """Return current / min / max power-limit info (watts) for GPU `idx`.
 
