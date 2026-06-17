@@ -29,7 +29,13 @@ from .watchdog import WATCHDOG
 
 
 class StatPanel(Static):
-    """One resource panel; re-renders when `body` changes."""
+    """One resource panel; re-renders when `body` changes.
+
+    `refresh_body()` skips the reactive assignment when the new value
+    is the same as the old one — Textual will still schedule a
+    re-render on every set, so guarding here saves real work when
+    nothing's moved (idle desk, snapshot returned an identical string).
+    """
 
     body: reactive[str] = reactive("loading…")
 
@@ -43,9 +49,11 @@ class StatPanel(Static):
 
     def refresh_body(self) -> None:
         try:
-            self.body = self._getter()
+            new_body = self._getter()
         except Exception as e:  # never let one bad probe kill the loop
-            self.body = f"[red]probe error:[/red] {e}"
+            new_body = f"[red]probe error:[/red] {e}"
+        if new_body != self.body:
+            self.body = new_body
 
 
 class ProcessTable(DataTable):
@@ -892,18 +900,15 @@ class WattsonApp(App):
         self.sub_title = "your machine's personal assistant"
         # De-dup toasts: each `_notify_once(key, ...)` fires at most once.
         self._notified: set[str] = set()
-        # v0.0.14 revision: v0.0.13's three-worker design caused a panel
-        # rendering regression (multi-line bodies showed only first line
-        # after a `call_from_thread` update). Going back to v0.0.12's
-        # working model — stat panels + metrics run synchronously on the
-        # main thread, only the genuinely heavy process snapshot runs in
-        # a worker. The real perf win comes from caching all NVML calls
-        # in gpu.py (0.5 s TTL) so each tick makes ~14× fewer driver
-        # round-trips than before.
+        # v0.0.15 cadence: 2 s light + 3 s processes (was 1 s / 2 s).
+        # User reported persistent lag despite all the v0.0.11-v0.0.14
+        # caching. Halving the refresh rate is the most reliable way to
+        # make key events feel instant — slightly staler data on a
+        # system monitor is a trade most users gladly take.
         self._refresh_light()
         self._refresh_processes()
-        self.set_interval(1.0, self._refresh_light)
-        self.set_interval(2.0, self._refresh_processes)
+        self.set_interval(2.0, self._refresh_light)
+        self.set_interval(3.0, self._refresh_processes)
 
     def action_refresh(self) -> None:
         self._refresh_all()
@@ -1036,33 +1041,49 @@ class WattsonApp(App):
 
     def _refresh_all(self) -> None:
         """Compatibility shim — kill/priority/affinity/power-limit
-        callbacks call this to nudge a refresh after a controlling
-        action. Triggers the light path; processes catch up on their
-        own 2 s cadence."""
-        self._refresh_light()
+        callbacks call this after a controlling action. Only kicks
+        the process worker (which is what visibly changes after a
+        kill); the light refresh runs on its own 2 s cadence and
+        catches up within a tick. `_refresh_light` is now an async
+        coroutine and would need scheduling boilerplate to call from
+        a sync callback — not worth the noise for a UI nudge."""
+        self._refresh_processes()
 
-    def _refresh_light(self) -> None:
-        """Sync refresh on the main thread for stat panels + metrics.
+    async def _refresh_light(self) -> None:
+        """Async sync-style refresh for stat panels + metrics + watchdog.
+
+        Async because Textual's `set_interval` accepts coroutines, and
+        `await asyncio.sleep(0)` between expensive ops yields to the
+        event loop — that's what lets a `t` / `g` / `k` keypress jump
+        the queue instead of waiting for the whole refresh to finish.
 
         Cheap because:
-          - cpu/memory/disk snapshots are fast (or cached in disk's
-            case);
-          - gpu.snapshot / gpu.metrics / gpu.throttle_masks all share
-            the cached `_collect()` in gpu.py, so a single 0.5 s tick
-            only triggers one NVML round across all three.
+          - cpu / memory / disk snapshots are fast (or cached in disk
+            and CPU-temp cases);
+          - gpu.snapshot / gpu.metrics / gpu.throttle_masks share the
+            cached `_collect()` in gpu.py, so a single tick triggers
+            at most one NVML round across all three.
         """
+        import asyncio as _asyncio
+
         for panel in self.query(StatPanel):
             panel.refresh_body()
+            await _asyncio.sleep(0)  # let key events through
         try:
             all_metrics: dict[str, float] = {}
             all_metrics.update(cpu.metrics())
             all_metrics.update(memory.metrics())
             all_metrics.update(gpu.metrics())
             HISTORY.add_many(all_metrics)
+            await _asyncio.sleep(0)
             WATCHDOG.check(all_metrics, gpu.throttle_masks())
             count = WATCHDOG.session_count
             base = "your machine's personal assistant"
-            self.sub_title = f"{base} · ⚠ {count}" if count else base
+            new_sub = f"{base} · ⚠ {count}" if count else base
+            # Only assign when changed; Textual still does layout work
+            # on identical assignments.
+            if self.sub_title != new_sub:
+                self.sub_title = new_sub
         except Exception as e:
             self._notify_once(
                 "metrics-error",

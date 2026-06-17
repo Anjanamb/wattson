@@ -6,7 +6,14 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.14` — fourth perf pass, with a course-correction. v0.0.13's three-worker design caused a panel rendering regression and didn't actually fix the underlying NVML latency that's the real bottleneck on Windows. Reverted the panel + metric workers; kept the process worker; consolidated all NVML calls behind a single shared cache.
+`v0.0.15` — fifth perf pass, this time pragmatic. v0.0.11→14 had me chasing the wrong leads — caching helped, threading partly helped, but the user kept reporting "takes forever to respond" because at 1 Hz Textual's rendering pipeline is still doing real work every tick regardless of how cheap the probes are. v0.0.15 just halves the cadence and lets key events interleave properly.
+
+### v0.0.15 additions / fixes
+
+- **Refresh cadence halved.** `_refresh_light` now runs every 2 s (was 1 s) and `_refresh_processes` every 3 s (was 2 s). On a system monitor, slightly staler data is a trade most users gladly take for an instant key response. The genuinely-fast probes (psutil cpu/mem/disk) don't lose anything visible at 2 s; the cached GPU NVML round happens once per 2-s tick now instead of twice.
+- **`_refresh_light` is now async.** Same body, but a coroutine. Lets us `await asyncio.sleep(0)` between panel refreshes and between metric collection / watchdog check — that yield is what lets `t` / `g` / `k` / etc. cut the queue instead of waiting for the whole refresh to finish.
+- **Reactive write guards.** `StatPanel.refresh_body()` now skips the assignment when the new body equals the old. Same guard on `self.sub_title`. Textual still schedules a re-render on every reactive set, even with identical values; this is a free win on idle desks where panel content doesn't actually move every tick.
+- **`_refresh_all` shim simplified.** Was triggering the light path after kill/priority/affinity actions; now just nudges the process worker (the only thing visibly affected by those actions). Removes the awkwardness of calling an async coroutine from a sync callback.
 
 ### v0.0.14 additions / fixes
 

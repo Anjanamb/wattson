@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.14-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.15-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.14` — fourth perf pass, with a course-correction. v0.0.13's three-worker design caused a panel rendering regression (multi-line bodies truncated after a `call_from_thread` update) and didn't actually fix the underlying NVML latency. v0.0.14 reverts to v0.0.12's working sync model for stat panels + metrics, keeps the worker only for the genuinely heavy process snapshot, and lands the real perf win: **all NVML calls in `gpu.py` go through a shared 0.5 s cache**, so a single tick now triggers ~3× fewer driver round-trips. Disk and temp caches stay from earlier versions.
+**Status:** `v0.0.15` — pragmatic perf release. v0.0.11–v0.0.14 added a lot of caching and threading, but the user still reported the UI took forever to respond. The actual lever was the refresh cadence itself: at 1 Hz the main thread spends real time on Textual's render pipeline regardless of how cheap the probes are. v0.0.15 halves it to 2 s for the light refresh and bumps the process refresh to 3 s; also yields to the event loop between expensive ops inside `_refresh_light` so key events can interleave, and skips reactive widget assignments when the new value equals the old.
 
 ## Planned features
 
