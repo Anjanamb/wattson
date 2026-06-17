@@ -6,6 +6,7 @@ events to disk (`w` opens the log)."""
 from __future__ import annotations
 
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, ScrollableContainer, Vertical
@@ -891,8 +892,14 @@ class WattsonApp(App):
         self.sub_title = "your machine's personal assistant"
         # De-dup toasts: each `_notify_once(key, ...)` fires at most once.
         self._notified: set[str] = set()
-        self._refresh_all()
-        self.set_interval(1.0, self._refresh_all)
+        # Two cadences: fast probes on the main thread (cpu/mem/disk/gpu
+        # stat panels + watchdog) on 1 Hz, slow probes (process snapshot)
+        # on a 2 s worker so the UI thread isn't blocked. Pressing a key
+        # while the worker is running stays instant.
+        self._refresh_light()
+        self._refresh_processes()
+        self.set_interval(1.0, self._refresh_light)
+        self.set_interval(2.0, self._refresh_processes)
 
     def action_refresh(self) -> None:
         self._refresh_all()
@@ -1024,26 +1031,16 @@ class WattsonApp(App):
         self.notify(message, severity=severity, timeout=8)
 
     def _refresh_all(self) -> None:
-        # Stat panels — each StatPanel.refresh_body already has its own
-        # try/except, so one bad panel can't break the others.
+        """Compatibility shim — older callers (kill/priority/affinity/
+        power-limit callbacks) call this to nudge a refresh after a
+        controlling action. Now just delegates to the light path; the
+        process snapshot will catch up on its own 2 s cadence."""
+        self._refresh_light()
+
+    def _refresh_light(self) -> None:
+        """Fast path on the main thread: stat panels + metrics + watchdog."""
         for panel in self.query(StatPanel):
             panel.refresh_body()
-
-        # Process table — isolated try block so a snapshot/render failure
-        # does not also kill history+watchdog below.
-        try:
-            rows = processes.snapshot(limit=20)
-            self.query_one(
-                "#processes-table", ProcessTable
-            ).refresh_rows(rows)
-        except Exception as e:
-            self._notify_once(
-                "processes-error",
-                f"processes probe error: {type(e).__name__}: {e}",
-                "error",
-            )
-
-        # History + watchdog — independent of the process table.
         try:
             all_metrics: dict[str, float] = {}
             all_metrics.update(cpu.metrics())
@@ -1060,6 +1057,37 @@ class WattsonApp(App):
                 f"metrics/watchdog error: {type(e).__name__}: {e}",
                 "error",
             )
+
+    @work(exclusive=True, thread=True)
+    def _refresh_processes(self) -> None:
+        """Heavy path on a worker thread.
+
+        `processes.snapshot()` iterates every PID and on Windows still
+        spends real time even after the two-phase optimisation — far
+        more than the input loop can tolerate at 1 Hz. Running it in a
+        thread keeps key events instant. `exclusive=True` guarantees
+        only one snapshot is in flight at a time.
+        """
+        try:
+            rows = processes.snapshot(limit=20)
+        except Exception as e:
+            self.call_from_thread(
+                self._notify_once,
+                "processes-error",
+                f"processes probe error: {type(e).__name__}: {e}",
+                "error",
+            )
+            return
+        self.call_from_thread(self._apply_process_rows, rows)
+
+    def _apply_process_rows(self, rows: list[dict]) -> None:
+        """Main-thread sink for the worker's results."""
+        try:
+            self.query_one(
+                "#processes-table", ProcessTable
+            ).refresh_rows(rows)
+        except Exception:
+            pass
 
 
 def main() -> None:

@@ -6,7 +6,14 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
-`v0.0.11` — perf + stability release. v0.0.10's Windows experience was sluggish (TUI noticeably slow to start and refresh) and the Disk panel crashed on the user's box with `argument 1 (impossible<bad format char>)`. Three fixes shipped together.
+`v0.0.12` — second perf pass. v0.0.11's caching helped but the user still reported "each command takes much time to respond". Root cause: even with the two-phase optimisation, `processes.snapshot()` runs entirely on Textual's main thread, and on Windows it still spends enough time per tick to delay key events. Fix is to move the snapshot to a worker thread via `@work(thread=True)` and route results back through `call_from_thread`. Also got better disk panel diagnostics — the user saw "no readable partitions" on a perfectly working C: drive, which meant the inner loop was masking real exceptions silently.
+
+### v0.0.12 additions / fixes
+
+- **Worker-thread process snapshot.** `WattsonApp` gains `_refresh_light` (main thread, 1 Hz) and `_refresh_processes` (`@work(exclusive=True, thread=True)`, 2 Hz). The light path does stat panels + history + watchdog as before. The worker does `processes.snapshot(limit=20)` off-thread, then dispatches the result list to `_apply_process_rows` via `call_from_thread` so the DataTable update happens on the main thread (Textual requirement). `exclusive=True` ensures at most one snapshot in flight even if a tick gets delayed.
+- **Backwards-compat shim.** Existing controlling actions (kill, priority, affinity, power-limit callbacks) call `self._refresh_all()` to nudge a UI refresh after the action. The method is now a one-liner that calls `_refresh_light()`; the process snapshot catches up on its own 2 s cadence. Avoids touching every callsite while keeping the public method working.
+- **Refresh cadence rationale.** Process snapshot at 2 Hz instead of 1 Hz: on Windows the snapshot itself is ~150-300 ms even after the v0.0.11 two-phase pass. At 1 Hz we'd be paying that 30 % of every tick; at 2 Hz it's 15 %. Stat panels and metrics stay 1 Hz because they're cheap (psutil scalars + NVML, ~5-15 ms total).
+- **Disk diagnostics.** `disk.snapshot()` now tries `disk_partitions(all=False)` first, falls back to `all=True` if the strict call returns nothing (some Windows configs only expose removable volumes in the strict list). When `disk_usage` fails on every partition, the panel says `all partitions failed — e.g. C:\\: OSError` instead of pretending no partitions exist. Helps figure out *which* exception class is actually being raised on the user's box.
 
 ### v0.0.11 additions / fixes
 
