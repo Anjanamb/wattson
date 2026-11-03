@@ -3,7 +3,7 @@
 > Your machine's personal assistant — a DL-workload-aware system monitor.
 
 [![Status](https://img.shields.io/badge/status-active%20development-yellow?style=flat-square)](#planned-features)
-[![Version](https://img.shields.io/badge/version-0.0.18-7DD3FC?style=flat-square)](#planned-features)
+[![Version](https://img.shields.io/badge/version-0.0.19-7DD3FC?style=flat-square)](#planned-features)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-1E1E2E?style=flat-square)](https://textual.textualize.io/)
 [![NVIDIA](https://img.shields.io/badge/GPU-NVIDIA_NVML-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://developer.nvidia.com/nvidia-management-library-nvml)
@@ -11,7 +11,7 @@
 
 A terminal UI for the bits of system monitoring that matter when you're running deep-learning workloads: GPU utilisation per training job, thermal headroom, throttling alerts, and the hardware details you forget every time someone asks *"wait, what model GPU is in this rig?"*
 
-**Status:** `v0.0.18` — added WSL2 install path. The native-Windows code path is solid now, but for Windows users running DL workloads inside WSL Ubuntu, **wattson runs significantly snappier inside WSL** (Linux `psutil`, native `/proc` and `/sys` reads, no WMI dance for CPU temp, NVML works via NVIDIA's WSL2 CUDA driver). README has step-by-step setup. v0.0.17 fixes still apply: process table column widths are explicit, Windows disk reads use ctypes directly, CPU temp on the i7-13700H needs LibreHardwareMonitor on bare metal but reads cleanly in WSL.
+**Status:** `v0.0.19` — **`wattson diagnose`** explains *why* a training run is slow (dataloader-starved GPU, I/O-bound input, throttling, OOM risk, stale VRAM holders …) and ships with an [AI agent skill](#ai-agent-skill-wattson-diagnose) so Claude Code, Cursor, Codex & co. can measure your box and fix the training code for you. v0.0.18 added the WSL2 install path. The native-Windows code path is solid now, but for Windows users running DL workloads inside WSL Ubuntu, **wattson runs significantly snappier inside WSL** (Linux `psutil`, native `/proc` and `/sys` reads, no WMI dance for CPU temp, NVML works via NVIDIA's WSL2 CUDA driver). README has step-by-step setup. v0.0.17 fixes still apply: process table column widths are explicit, Windows disk reads use ctypes directly, CPU temp on the i7-13700H needs LibreHardwareMonitor on bare metal but reads cleanly in WSL.
 
 ## Planned features
 
@@ -37,6 +37,9 @@ A terminal UI for the bits of system monitoring that matter when you're running 
 - [x] **Windows CPU temperature** — falls back to WMI `MSAcpi_ThermalZoneTemperature` when psutil has no Windows backend, then to LibreHardwareMonitor / OpenHardwareMonitor for modern laptops that hide CPU temp behind the EC *(v0.0.9 + v0.0.10)*
 - [x] **CPU affinity controls** — `a` on the selected row opens a modal that accepts a flexible core list (`0,1,2,3` or `0-7,16-19`); `All cores` button restores everything. Cross-platform via `psutil.Process.cpu_affinity()`; macOS surfaces a friendly "not supported" message instead of a crash *(v0.0.10)*
 - [x] **Per-GPU drill-down screen** — `g` opens a dedicated view with the GPU's hardware info (name, UUID, serial, PCIe gen+width), live current values + throttle reasons, four braille line charts (util / temp / power / VRAM %), and a filtered table of processes holding VRAM on that GPU. Single-GPU rigs always drill into GPU 0; multi-GPU picker is the only thing still TBD here *(v0.0.10)*
+
+- [x] **`wattson diagnose`** — samples the box for N seconds and reports ranked findings (GPU starved by single-thread / CPU-bound / I/O-bound input, under-utilised GPU, stale VRAM holders, thermal + power throttling, VRAM near OOM, multi-process GPU contention, RAM pressure, swapping, full disks, hot CPU), each with evidence and fixes. `--json` for agents; plus `wattson status --json` and `wattson events --json` *(v0.0.19)*
+- [x] **Agent skill** — `skills/wattson-diagnose/SKILL.md` teaches coding agents a measure → interpret → fix code → re-measure loop *(v0.0.19)*
 
 ### Coming
 
@@ -107,6 +110,46 @@ Inside the `tui` mode:
 - `i` — open the hardware-inventory screen (`i` / `q` / `Esc` to return)
 - `t` — open the live trends screen (`t` / `q` / `Esc` to return)
 - `w` — open the watchdog event log (`w` / `q` / `Esc` to return)
+
+## Diagnose a slow training run
+
+Start your training job, let it warm up, then:
+
+```bash
+wattson diagnose              # 10 s sample, human-readable findings
+wattson diagnose -d 30 --json # longer window, JSON for scripts / agents
+wattson status --json         # 1 s raw snapshot
+wattson events --json         # past watchdog alerts (~/.wattson/events.jsonl)
+```
+
+Example (a `DataLoader(num_workers=0)`-style bottleneck):
+
+```
+WARN GPU0 starved by a single busy CPU thread (19% util)  (gpu_starved_single_thread)
+     One CPU core is pegged while the rest of the machine is idle. …
+     • Set DataLoader(num_workers=N) with N ≈ physical cores − 1, plus pin_memory=True.
+```
+
+`diagnose` only reads; it never changes anything. Findings that suggest an
+action (`wattson kill`, `wattson power`) list it with `requires_confirmation: true`.
+
+## AI agent skill: wattson-diagnose
+
+[`skills/wattson-diagnose/`](skills/wattson-diagnose/SKILL.md) is a portable
+`SKILL.md` skill. It lets a coding agent measure your machine with wattson,
+map each finding to your training code (`num_workers`, batch size, AMP,
+host syncs …), propose a diff, and re-measure to prove the fix.
+
+Install for Claude Code:
+
+```bash
+pipx install "git+https://github.com/Anjanamb/wattson"
+mkdir -p ~/.claude/skills && cp -r skills/wattson-diagnose ~/.claude/skills/
+```
+
+Other agents that read `SKILL.md` (Codex CLI, Cursor, Gemini CLI, …) use the
+same folder in their own skills directory. Then just ask: *"why is my
+training so slow?"*
 
 ## Why "wattson"?
 

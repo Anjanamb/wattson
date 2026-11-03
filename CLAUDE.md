@@ -6,6 +6,16 @@ Parent workspace: `Goals\github\CLAUDE.md` (gh CLI auth, conventions).
 
 ## Current state
 
+`v0.0.19` — agent-facing diagnosis. Motivation: list wattson as a SKILL.md skill on Agensi (agent-skills marketplace), so the CLI needed a machine-readable "explain this box" mode.
+
+### v0.0.19 additions
+
+- **New module** `src/wattson/diagnose.py`: `sample()` (the only OS-touching stage) → `summarize()` → `analyze()` (pure rule functions in `RULES`) → `report()`. Rules are tested with synthetic summaries in `tests/test_diagnose.py`, so no GPU is needed in CI.
+- **CLI:** `wattson diagnose [-d SEC] [-i SEC] [--json]`, `wattson status --json`, `wattson events [-n N] [--json]`. JSON carries `schema_version` (1). Bump it on breaking changes, because the skill depends on it.
+- **gpu.py:** public `devices()` (cached `_collect`) and `throttle_labels(mask)`.
+- **Skill:** `skills/wattson-diagnose/SKILL.md` + `references/findings.md` (one section per finding id). If you add or rename a finding id, update findings.md too.
+- Verified on the RTX 4060 laptop with synthetic torch workloads: a starved single-thread loop → `gpu_starved_single_thread` (19% util, 98% hot core); an idle VRAM holder → `stale_gpu_process`.
+
 `v0.0.18` — added a WSL2 install path to the README. User asked whether running wattson inside WSL would dodge the Windows-specific bottlenecks; answer is yes for the typical DL-on-WSL workflow, so it's worth documenting.
 
 ### v0.0.18 additions
