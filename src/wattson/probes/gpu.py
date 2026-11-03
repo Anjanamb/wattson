@@ -252,6 +252,20 @@ def throttle_text(mask: int) -> str:
     return _throttle_text(mask)
 
 
+def throttle_labels(mask: int) -> list[str]:
+    """Active throttle reasons as a list of labels (GpuIdle excluded)."""
+    return [label for bit, label in _THROTTLE_LABELS if mask & bit]
+
+
+def devices() -> dict | None:
+    """Structured per-GPU readings (shared 0.5 s cache).
+
+    `None` = NVML unavailable, `{}` = no GPUs. See `_collect_uncached`
+    for the per-device keys. Used by `wattson diagnose`.
+    """
+    return _collect()
+
+
 def device_count() -> int:
     """Return the number of NVIDIA devices (0 if no driver / no GPUs)."""
     if not _init():

@@ -3,7 +3,9 @@
   wattson                      → live dashboard (Rich Live, Ctrl+C to quit)
   wattson live  [-i SEC]       → same, with optional refresh interval
   wattson tui                  → original Textual app (full screens)
-  wattson status               → one-shot snapshot, print and exit
+  wattson status [--json]      → one-shot snapshot, print and exit
+  wattson diagnose [--json]    → sample N seconds, explain bottlenecks
+  wattson events [--json]      → recent watchdog alerts
   wattson kill <pid>           → SIGTERM the given PID
   wattson nice <pid> <low|normal|high>
   wattson power <watts>        → set GPU0 power limit
@@ -16,6 +18,7 @@ loop, just an exit code and a printed result.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from . import __version__
@@ -35,10 +38,46 @@ def _cmd_tui(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_status(_args: argparse.Namespace) -> int:
+def _cmd_status(args: argparse.Namespace) -> int:
+    if args.json:
+        from . import diagnose
+
+        summary = diagnose.summarize(diagnose.sample(duration=1.0, interval=1.0))
+        print(json.dumps(summary, indent=2))
+        return 0
     from . import live
 
     return live.status()
+
+
+def _cmd_diagnose(args: argparse.Namespace) -> int:
+    from . import diagnose
+
+    if not args.json:
+        print(f"wattson: sampling for {args.duration:g} s …", file=sys.stderr)
+    rep = diagnose.run(duration=args.duration, interval=args.interval)
+    if args.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        from rich.console import Console
+
+        Console().print(diagnose.render_text(rep))
+    return 0
+
+
+def _cmd_events(args: argparse.Namespace) -> int:
+    from .watchdog import Watchdog
+
+    events = Watchdog().recent_events(limit=args.limit)
+    if args.json:
+        print(json.dumps(events, indent=2))
+        return 0
+    if not events:
+        print("no watchdog events logged yet (they are recorded while `wattson tui` runs)")
+        return 0
+    for e in events:
+        print(f"{e.get('ts', '?')}  {e.get('severity', '?'):<4}  {e.get('message', '')}")
+    return 0
 
 
 def _cmd_kill(args: argparse.Namespace) -> int:
@@ -94,7 +133,37 @@ def _build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser(
         "status", help="print one snapshot and exit",
     )
+    p_status.add_argument(
+        "--json", action="store_true",
+        help="machine-readable snapshot (for scripts and AI agents)",
+    )
     p_status.set_defaults(func=_cmd_status)
+
+    p_diag = sub.add_parser(
+        "diagnose",
+        help="sample the machine and explain DL training bottlenecks",
+    )
+    p_diag.add_argument(
+        "-d", "--duration", type=float, default=10.0,
+        help="seconds to sample (default 10; run it while training is going)",
+    )
+    p_diag.add_argument(
+        "-i", "--interval", type=float, default=1.0,
+        help="seconds between samples (default 1.0)",
+    )
+    p_diag.add_argument(
+        "--json", action="store_true",
+        help="emit findings + summary as JSON (for AI agents)",
+    )
+    p_diag.set_defaults(func=_cmd_diagnose)
+
+    p_events = sub.add_parser("events", help="show recent watchdog alerts")
+    p_events.add_argument(
+        "-n", "--limit", type=int, default=50,
+        help="max events to show (default 50)",
+    )
+    p_events.add_argument("--json", action="store_true", help="emit JSON")
+    p_events.set_defaults(func=_cmd_events)
 
     p_kill = sub.add_parser("kill", help="SIGTERM a PID")
     p_kill.add_argument("pid", type=int)
